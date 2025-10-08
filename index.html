@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🌸 أزورا أنميت | Azura Animet</title>
+  <!--    // Firebase config and initialization
+    const firebaseConfig = {
+      apiKey: "AIzaSyDLH097-jmaJ5BKVfQx23mUbX7SDYJMgrU",
+      authDomain: "momeyz-b1c71.firebaseapp.com",
+      databaseURL: "https://momeyz-b1c71-default-rtdb.firebaseio.com",
+      projectId: "momeyz-b1c71",
+      storageBucket: "momeyz-b1c71.firerasestorage.app",
+      messagingSenderId: "811234650360",
+      appId: "1:811234650360:web:e7b3377e48a1f3f7c6330d"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // Online users tracking
+    const connectedRef = db.ref('.info/connected');
+    const onlineRef = db.ref('/online');
+    
+    connectedRef.on('value', (snap) => {
+      if (snap.val()) {
+        const userRef = onlineRef.child(username || 'anonymous');
+        userRef.set(true);
+        userRef.onDisconnect().remove();
+      }
+    });
+
+    onlineRef.on('value', (snap) => {
+      const online = snap.val() || {};
+      const count = Object.keys(online).length;
+      document.getElementById('online-count').textContent = `👥 ${count} متصل`;
+    });
+
+    // URL detection in messages
+    function linkify(text) {
+      const urlPattern = /(\b(https?|ftp):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/gim;
+      return text.replace(urlPattern, '<a href="$1" target="_blank" class="text-pink-400 hover:underline">$1</a>');
+    }
+
+    // Image viewer
+    window.openImageViewer = (src) => {
+      const viewer = document.createElement('div');
+      viewer.className = 'fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 fade visible-fade';
+      viewer.innerHTML = `
+        <img src="${src}" class="max-w-full max-h-[90vh] rounded-lg shadow-2xl" alt="صورة">
+        <button class="absolute top-4 right-4 text-white text-4xl hover:text-pink-400">&times;</button>
+      `;
+      viewer.onclick = () => {
+        viewer.classList.remove('visible-fade');
+        setTimeout(() => viewer.remove(), 700);
+      };
+      document.body.appendChild(viewer);
+    };
+  
+  <!-- Use compiled Tailwind CSS in production (build with Tailwind CLI or PostCSS) -->
+  <link rel="stylesheet" href="/dist/styles.css">
+  <!-- Google Fonts: Tajawal -->
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #e75480;
+      --secondary: #a259f7;
+      --dark-bg: #0f0f0f;
+      --chat-bg: #181828;
+      --msg-bg: #23233a;
+    }
+    body { 
+      font-family: 'Tajawal', Arial, sans-serif; 
+      background: var(--dark-bg); 
+      color: #fff;
+      scroll-behavior: smooth;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+    }
+    .neon { 
+      text-shadow: 0 0 8px var(--primary), 0 0 16px var(--secondary);
+      animation: glow 2s ease-in-out infinite alternate;
+    }
+    @keyframes glow {
+      from { text-shadow: 0 0 8px var(--primary), 0 0 16px var(--secondary); }
+      to { text-shadow: 0 0 12px var(--primary), 0 0 24px var(--secondary); }
+    }
+    .fade { 
+      transition: all 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+      will-change: opacity, visibility, transform;
+    }
+    .hidden-fade { 
+      opacity: 0; 
+      visibility: hidden; 
+      pointer-events: none;
+      transform: scale(0.95);
+    }
+    .visible-fade { 
+      opacity: 1; 
+      visibility: visible;
+      transform: scale(1);
+    }
+    ::selection { background: var(--secondary); color: #fff; }
+    input, textarea { 
+      background: var(--chat-bg) !important; 
+      color: #fff !important;
+      transition: all 0.3s ease;
+    }
+    input:focus, textarea:focus {
+      box-shadow: 0 0 0 2px var(--primary);
+    }
+    .chat-scroll { 
+      scroll-behavior: smooth;
+      scrollbar-width: thin;
+      scrollbar-color: var(--secondary) var(--chat-bg);
+    }
+    .chat-scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+    .chat-scroll::-webkit-scrollbar-track {
+      background: var(--chat-bg);
+    }
+    .chat-scroll::-webkit-scrollbar-thumb {
+      background-color: var(--secondary);
+      border-radius: 6px;
+    }
+    .anime-poster {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      will-change: transform;
+    }
+    .anime-poster:hover {
+      z-index: 10;
+      transform: scale(1.05) translateY(-5px);
+      box-shadow: 0 10px 40px -10px var(--primary);
+    }
+    .loading::after {
+      content: '';
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--primary);
+      border-right-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-left: 8px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .msg-enter {
+      animation: msg-in 0.3s ease-out;
+    }
+    @keyframes msg-in {
+      from { 
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to { 
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+  </style>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+</head>
+<body class="min-h-screen flex flex-col justify-between">
+  <!-- Header -->
+  <header class="py-6 text-center">
+    <h1 class="text-3xl md:text-4xl font-black neon">🌸 أزورا أنميت</h1>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 flex flex-col items-center justify-center">
+    <!-- Anime Gallery -->
+    <section id="anime-gallery" class="w-full fade visible-fade">
+      <div class="flex justify-center mb-4 gap-4 items-center">
+        <input id="search-bar" type="text" placeholder="🔍 ابحث عن أنمي..." class="w-80 md:w-96 px-4 py-2 rounded-lg border-2 border-pink-500 focus:ring-2 focus:ring-pink-400 bg-[#181828] text-lg outline-none transition-all duration-200" autocomplete="off">
+        <button id="shuffle-btn" class="px-3 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700">🔀 خلط البوسترات</button>
+      </div>
+
+      <div id="posters" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 px-4 md:px-12">
+        <!-- Image-only posters. Titles shown in viewer modal on click -->
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Jujutsu Kaisen S2" data-synopsis="الموسم الثاني من جوجوتسو كايسن." data-url="https://myanimelist.net/anime/"> 
+          <img src="https://i.imgur.com/XKqV4Tm.jpg" alt="Jujutsu Kaisen" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Solo Leveling" data-synopsis="مقتبس من المانجاِ الشهيرة عن صياد يتطور ليصبح الأقوى." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/6zsJ6k4.jpg" alt="Solo Leveling" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Demon Slayer S4" data-synopsis="الموسم الرابع من قاتل الشياطين." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/N9LcMhk.jpg" alt="Demon Slayer" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Mushoku Tensei S2" data-synopsis="موشوكو تنسي الموسم الثاني." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/QK5EZ8P.jpg" alt="Mushoku Tensei" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Dr. Stone S3" data-synopsis="دكتور ستون الموسم الثالث." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/JKp7D4C.jpg" alt="Dr Stone" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Spy x Family S2" data-synopsis="سباي x فاميلي الموسم الثاني." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/LKB8BGZ.jpg" alt="Spy x Family" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Undead Unluck" data-synopsis="قصة غريبة عن فتاة وفتى لا يموت." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/yXkxkGN.jpg" alt="Undead Unluck" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Goblin Slayer S2" data-synopsis="الموسم الثاني من قاتل الغيلان." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/VZk9NhR.jpg" alt="Goblin Slayer" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Shangri-La Frontier" data-synopsis="شانغريلا فرونتير لعبة غامرة." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/8WyAS8c.jpg" alt="Shangri-La Frontier" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="The Eminence in Shadow S2" data-synopsis="البارز في الظل الموسم الثاني." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/mB9vqBF.jpg" alt="The Eminence in Shadow" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="Ragna Crimson" data-synopsis="راغنا كريمسون." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/JbTvN8L.jpg" alt="Ragna Crimson" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+        <div class="anime-poster relative group cursor-pointer rounded-xl overflow-hidden" data-title="A Returner's Magic" data-synopsis="سحر العائد." data-url="https://myanimelist.net/anime/">
+          <img src="https://i.imgur.com/K9RkSK7.jpg" alt="A Returner's Magic" class="w-full h-44 object-cover">
+          <div class="fav-badge absolute top-2 left-2 bg-black/50 p-1 rounded-full text-sm hidden">❤️</div>
+        </div>
+      </div>
+
+      <!-- Poster viewer modal -->
+      <div id="poster-modal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <div class="bg-[#0f0f14] rounded-xl overflow-hidden max-w-3xl w-full">
+          <div class="flex items-center justify-between p-4 border-b border-[#222235]">
+            <div class="text-white font-bold" id="modal-title">Title</div>
+            <div class="flex items-center gap-2">
+              <button id="modal-fav" class="px-3 py-1 rounded bg-pink-500 text-white">❤️ إضافة للمفضلة</button>
+              <button id="modal-copy" class="px-3 py-1 rounded bg-purple-600 text-white">نسخ الرابط</button>
+              <a id="modal-download" class="px-3 py-1 rounded bg-green-600 text-white" download>تحميل</a>
+              <button id="modal-close" class="px-3 py-1 rounded bg-gray-700 text-white">إغلاق</button>
+            </div>
+          </div>
+          <div class="p-4 flex gap-4 flex-col md:flex-row">
+            <div class="md:w-1/2">
+              <img id="modal-img" src="" alt="poster" class="w-full rounded">
+            </div>
+            <div class="md:w-1/2 text-sm text-gray-200">
+              <div id="modal-synopsis" class="mb-4"></div>
+              <a id="modal-external" href="#" target="_blank" class="text-pink-400 hover:underline">عرض المزيد</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Chat Section (hidden by default) - full screen responsive -->
+    <section id="chat-section" class="fade hidden-fade">
+      <div class="fixed inset-0 z-40 flex items-center justify-center p-4 md:p-8">
+        <div class="w-full max-w-3xl h-full md:h-[90vh] flex flex-col rounded-2xl shadow-lg overflow-hidden bg-[#181828]/95">
+          <div class="flex items-center justify-between p-4 border-b border-[#222235]">
+            <div class="flex items-center gap-3">
+              <div class="relative">
+                <span class="text-pink-400 text-2xl animate-pulse">💬</span>
+                <div class="absolute -top-1 -right-1 w-2 h-2 bg-green-400 rounded-full" id="pulse-dot"></div>
+              </div>
+              <span class="font-black text-xl neon">Chat by YK</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <div id="status" class="text-sm font-bold"></div>
+              <div id="online-count" class="text-xs bg-pink-500/20 px-2 py-1 rounded-full"></div>
+              <button id="close-chat" class="ml-4 text-sm text-gray-300 hover:text-white px-3 py-1 rounded-lg bg-transparent">⤺ العودة</button>
+            </div>
+          </div>
+
+          <!-- Message actions menu -->
+          <div id="msg-actions" class="hidden fixed z-50 bg-[#23233a] rounded-xl shadow-xl p-2 min-w-[200px]">
+            <button class="w-full text-right px-3 py-2 hover:bg-pink-500/20 rounded-lg flex items-center gap-2" onclick="replyToMessage()">
+              <span>↩️</span>
+              <span>رد</span>
+            </button>
+            <button class="w-full text-right px-3 py-2 hover:bg-pink-500/20 rounded-lg flex items-center gap-2" onclick="forwardMessage()">
+              <span>↪️</span>
+              <span>إعادة توجيه</span>
+            </button>
+            <button class="w-full text-right px-3 py-2 hover:bg-pink-500/20 rounded-lg flex items-center gap-2" onclick="copyMessage()">
+              <span>📋</span>
+              <span>نسخ</span>
+            </button>
+            <button class="w-full text-right px-3 py-2 hover:bg-pink-500/20 rounded-lg flex items-center gap-2" onclick="reactToMessage()">
+              <span>👍</span>
+              <span>تفاعل</span>
+            </button>
+            <button class="w-full text-right px-3 py-2 hover:bg-pink-500/20 rounded-lg flex items-center gap-2 text-red-400" onclick="deleteMessage()">
+              <span>🗑️</span>
+              <span>حذف</span>
+            </button>
+          </div>
+
+          <!-- Reactions menu -->
+          <div id="reactions-menu" class="hidden fixed z-50 bg-[#23233a] rounded-xl shadow-xl p-2">
+            <div class="flex gap-2 text-xl">
+              <button class="hover:scale-125 transition-transform p-1" onclick="addReaction('👍')">👍</button>
+              <button class="hover:scale-125 transition-transform p-1" onclick="addReaction('❤️')">❤️</button>
+              <button class="hover:scale-125 transition-transform p-1" onclick="addReaction('😂')">😂</button>
+              <button class="hover:scale-125 transition-transform p-1" onclick="addReaction('😮')">😮</button>
+              <button class="hover:scale-125 transition-transform p-1" onclick="addReaction('😢')">😢</button>
+              <button class="hover:scale-125 transition-transform p-1" onclick="addReaction('🙏')">🙏</button>
+            </div>
+          </div>
+
+          <div id="username-prompt" class="mb-0 p-4">
+            <label for="username-input" class="font-semibold">اسم المستخدم:</label>
+            <div class="flex gap-2 mt-2">
+              <input id="username-input" type="text" maxlength="20" class="flex-1 px-3 py-2 rounded-lg border-2 border-purple-400 focus:ring-2 focus:ring-pink-400 bg-[#22223a] text-lg outline-none" placeholder="أدخل اسمك...">
+              <button id="username-btn" class="px-4 py-2 rounded-lg bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold hover:scale-105 transition-transform">دخول</button>
+            </div>
+          </div>
+
+          <div id="chat-ui" class="hidden flex flex-col flex-1">
+            <div id="messages" class="flex-1 overflow-y-auto chat-scroll px-4 py-3"></div>
+            <form id="chat-form" class="flex gap-2 items-end p-3 border-t border-[#222235] bg-[#14141b]">
+              <textarea id="msg-input" rows="1" class="flex-1 px-3 py-2 rounded-lg border-2 border-pink-400 focus:ring-2 focus:ring-pink-400 bg-[#22223a] text-lg outline-none resize-none" placeholder="اكتب رسالة..."></textarea>
+              <input type="file" id="media-input" accept="image/*,video/*,audio/*" class="hidden">
+              <button type="button" id="media-btn" class="px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-xl shadow-md">📎</button>
+              <button type="button" id="tts-btn" class="px-3 py-2 rounded-lg bg-pink-500 hover:bg-pink-600 text-white font-bold text-xl shadow-md">🔊</button>
+              <button type="submit" class="px-4 py-2 rounded-lg bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold hover:scale-105 transition-transform">إرسال</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="py-4 text-center text-sm text-pink-400">
+    Developed by: YK 🌸
+  </footer>
+
+  <!-- App Script -->
+  <script>
+    // Tailwind config for dark mode
+    tailwind.config = { darkMode: 'class' };
+
+    // Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyDLH097-jmaJ5BKVfQx23mUbX7SDYJMgrU",
+      authDomain: "momeyz-b1c71.firebaseapp.com",
+      databaseURL: "https://momeyz-b1c71-default-rtdb.firebaseio.com",
+      projectId: "momeyz-b1c71",
+      storageBucket: "momeyz-b1c71.firebasestorage.app",
+      messagingSenderId: "811234650360",
+      appId: "1:811234650360:web:e7b3377e48a1f3f7c6330d"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // Elements
+    const gallery = document.getElementById('anime-gallery');
+    const chatSection = document.getElementById('chat-section');
+    const searchBar = document.getElementById('search-bar');
+    const usernamePrompt = document.getElementById('username-prompt');
+    const usernameInput = document.getElementById('username-input');
+    const usernameBtn = document.getElementById('username-btn');
+    const chatUI = document.getElementById('chat-ui');
+    const chatForm = document.getElementById('chat-form');
+    const msgInput = document.getElementById('msg-input');
+    const messagesDiv = document.getElementById('messages');
+    const statusDiv = document.getElementById('status');
+    const mediaBtn = document.getElementById('media-btn');
+    const mediaInput = document.getElementById('media-input');
+    const ttsBtn = document.getElementById('tts-btn');
+    const postersGrid = document.getElementById('posters');
+    const posterModal = document.getElementById('poster-modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalImg = document.getElementById('modal-img');
+    const modalSynopsis = document.getElementById('modal-synopsis');
+    const modalExternal = document.getElementById('modal-external');
+    const modalFav = document.getElementById('modal-fav');
+    const modalCopy = document.getElementById('modal-copy');
+    const modalDownload = document.getElementById('modal-download');
+    const modalClose = document.getElementById('modal-close');
+
+    // Favorites stored as set of titles
+    const FAV_KEY = 'azura-favs';
+    let favs = new Set(JSON.parse(localStorage.getItem(FAV_KEY) || '[]'));
+
+    function updateFavBadges() {
+      postersGrid.querySelectorAll('.anime-poster').forEach(p => {
+        const title = p.dataset.title;
+        const badge = p.querySelector('.fav-badge');
+        if (favs.has(title)) badge.classList.remove('hidden'); else badge.classList.add('hidden');
+      });
+    }
+
+    // Open poster modal
+    postersGrid.addEventListener('click', (e) => {
+      const el = e.target.closest('.anime-poster');
+      if (!el) return;
+      const title = el.dataset.title;
+      const synopsis = el.dataset.synopsis || '';
+      const src = el.querySelector('img')?.src;
+      const external = el.dataset.url || '#';
+      modalTitle.textContent = title;
+      modalImg.src = src;
+      modalSynopsis.textContent = synopsis;
+      modalExternal.href = external;
+      modalDownload.href = src;
+      posterModal.classList.remove('hidden');
+    });
+
+    modalClose.addEventListener('click', () => posterModal.classList.add('hidden'));
+
+    modalFav.addEventListener('click', () => {
+      const title = modalTitle.textContent;
+      if (favs.has(title)) { favs.delete(title); modalFav.textContent = '❤️ إضافة للمفضلة'; }
+      else { favs.add(title); modalFav.textContent = 'إزالة من المفضلة'; }
+      localStorage.setItem(FAV_KEY, JSON.stringify(Array.from(favs)));
+      updateFavBadges();
+    });
+
+    modalCopy.addEventListener('click', () => {
+      const url = modalExternal.href;
+      navigator.clipboard.writeText(url).then(() => showToast('تم نسخ الرابط')); 
+    });
+
+    // Shuffle posters
+    document.getElementById('shuffle-btn').addEventListener('click', () => {
+      const items = Array.from(postersGrid.children);
+      for (let i = items.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        postersGrid.insertBefore(items[j], items[i]);
+      }
+      showToast('تم خلط البوسترات');
+    });
+
+    // Initialize fav badges
+    updateFavBadges();
+
+    let username = localStorage.getItem('azura-username') || '';
+    let connected = false;
+    let lastMsgKey = null;
+  const SECRET_CODE = '3000445';
+  const UNLOCK_KEY = 'azura-unlocked';
+
+    // Fade helpers
+    function fadeOut(el) {
+      el.classList.remove('visible-fade');
+      el.classList.add('hidden-fade');
+    }
+    function fadeIn(el) {
+      el.classList.remove('hidden-fade');
+      el.classList.add('visible-fade');
+    }
+
+    // Secret code unlock (robust: input, paste, Enter) and persistence
+    function tryUnlock(value) {
+      if (!value) return;
+      const v = String(value).trim();
+      if (v === SECRET_CODE) {
+        localStorage.setItem(UNLOCK_KEY, '1');
+        fadeOut(gallery);
+        setTimeout(() => {
+          fadeIn(chatSection);
+          // focus username if not set
+          if (!username) usernameInput.focus();
+        }, 700);
+        // clear search visually
+        searchBar.value = '';
+      }
+    }
+
+    // Try unlock on input (typed or pasted)
+    searchBar.addEventListener('input', e => tryUnlock(e.target.value));
+    // Also handle paste events explicitly
+    searchBar.addEventListener('paste', e => {
+      const pasted = (e.clipboardData || window.clipboardData).getData('text');
+      setTimeout(() => tryUnlock(searchBar.value || pasted), 50);
+    });
+    // Handle Enter key
+    searchBar.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        tryUnlock(searchBar.value);
+      }
+    });
+
+    // Restore unlocked state on load
+    if (localStorage.getItem(UNLOCK_KEY) === '1') {
+      // reveal chat without requiring typing again
+      fadeOut(gallery);
+      setTimeout(() => fadeIn(chatSection), 300);
+    }
+
+    // Username prompt logic
+    function showChatUI() {
+      usernamePrompt.classList.add('hidden');
+      chatUI.classList.remove('hidden');
+      chatUI.classList.add('flex');
+      setTimeout(() => { msgInput.focus(); }, 200);
+    }
+    if (username) {
+      usernameInput.value = username;
+      showChatUI();
+    }
+    usernameBtn.onclick = () => {
+      const val = usernameInput.value.trim();
+      if (val.length < 2) {
+        usernameInput.classList.add('border-red-500');
+        return;
+      }
+      username = val;
+      localStorage.setItem('azura-username', username);
+      showChatUI();
+    };
+    usernameInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') usernameBtn.click();
+    });
+
+    // Close chat button (returns to gallery and clears unlock)
+    const closeChatBtn = document.getElementById('close-chat');
+    if (closeChatBtn) {
+      closeChatBtn.addEventListener('click', () => {
+        localStorage.removeItem(UNLOCK_KEY);
+        fadeOut(chatSection);
+        setTimeout(() => fadeIn(gallery), 700);
+      });
+    }
+
+    // Connection status
+    db.ref(".info/connected").on("value", snap => {
+      connected = !!snap.val();
+      statusDiv.innerHTML = connected ? '<span class="text-green-400">✅ متصل</span>' : '<span class="text-red-400">❌ غير متصل</span>';
+    });
+
+    // Sound effects
+    const sounds = {
+      send: new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAAFbgCenp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6e//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjU0AAAAAAAAAAAAAAAAJAAAAAAAAAAAAQVuibBR6AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU='),
+      receive: new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAAFbgCenp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6e//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjU0AAAAAAAAAAAAAAAAJAAAAAAAAAAAAQVuibBR6AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=')
+    };
+
+    function playSound(type) {
+      sounds[type].currentTime = 0;
+      sounds[type].play().catch(() => {});
+    }
+
+    // Message rendering with animations and advanced features
+    function renderMsg(msg, key, self) {
+      const time = formatTime(msg.timestamp);
+      const messageStatus = msg.seen && msg.seen !== msg.user ? '✔️ تمت المشاهدة' : '';
+      const reactions = msg.reactions ? Object.entries(msg.reactions) : [];
+
+      const replyToHtml = msg.replyTo ? `
+        <div class="reply-to bg-[#2a2a42] p-2 rounded mb-2 text-sm opacity-75">
+          <div class="font-bold">${escapeHTML(msg.replyTo.user)}</div>
+          <div class="truncate">${escapeHTML(msg.replyTo.content)}</div>
+        </div>
+      ` : '';
+
+      let mainContent = '';
+      switch (msg.type) {
+        case 'text':
+          mainContent = `<div class="whitespace-pre-line">${linkify(escapeHTML(msg.content))}</div>`;
+          break;
+        case 'image':
+          mainContent = `
+            <div class="relative group">
+              <img src="${msg.content}" loading="lazy"
+                class="max-w-xs max-h-60 rounded-lg shadow-md mx-auto cursor-zoom-in transition-transform hover:scale-[1.02]"
+                onclick="openImageViewer(this.src)"
+                alt="صورة">
+              <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center">
+                <span class="text-white">انقر للتكبير</span>
+              </div>
+            </div>`;
+          break;
+        case 'video':
+          mainContent = `
+            <div class="relative group">
+              <video src="${msg.content}" preload="metadata" controls
+                class="max-w-xs max-h-60 rounded-lg shadow-md mx-auto"></video>
+            </div>`;
+          break;
+        case 'audio':
+          mainContent = `
+            <div class="relative">
+              <audio src="${msg.content}" preload="metadata" controls class="w-full"></audio>
+            </div>`;
+          break;
+        case 'tts':
+          mainContent = `
+            <div>
+              <button onclick="speakMsg('${escapeHTML(msg.content)}')"
+                class='px-3 py-1.5 rounded-full bg-gradient-to-r from-pink-500 to-purple-500 text-white font-bold mr-2 hover:opacity-90 transition-opacity shadow-lg'>
+                🔊 استمع
+              </button>
+              <span>${linkify(escapeHTML(msg.content))}</span>
+            </div>`;
+          break;
+        default:
+          mainContent = `<div>${escapeHTML(String(msg.content || ''))}</div>`;
+      }
+
+      const reactionsHtml = reactions.length ? `
+        <div class="flex flex-wrap gap-1 mt-2">
+          ${reactions.map(([emoji, users]) => `
+            <button class="bg-[#2a2a42] rounded-full px-2 py-0.5 text-sm hover:bg-pink-500/20 transition-colors"
+                    onclick="addReaction('${emoji}', '${key}')">
+              ${emoji} ${Array.isArray(users) ? users.length : (Object.keys(users || {}).length)}
+            </button>
+          `).join('')}
+        </div>
+      ` : '';
+
+      const bubbleClass = self ? 'bg-pink-600 text-white' : 'bg-[#23233a] text-white';
+
+      return `
+        <div class="mb-3 flex ${self ? 'justify-end' : 'justify-start'}" data-msg-id="${key}" oncontextmenu="showMessageActions(event, '${key}', ${self}); return false;">
+          <div class="relative group max-w-[80%]">
+            <div class="p-3 rounded-xl ${bubbleClass} shadow-md">
+              <div class="flex items-center justify-between mb-1">
+                <div class="font-bold text-sm">${escapeHTML(msg.user)}</div>
+                ${self ? `
+                  <button class="opacity-0 group-hover:opacity-100 transition-opacity text-xs hover:bg-black/20 rounded px-1" onclick="showMessageActions(event, '${key}', true)">•••</button>
+                ` : ''}
+              </div>
+              ${replyToHtml}
+              ${mainContent}
+              ${reactionsHtml}
+              <div class="text-xs text-gray-300 mt-2 flex items-center gap-2">
+                <span>${time}</span>
+                <span>${messageStatus}</span>
+              </div>
+            </div>
+            ${msg.edited ? '<div class="absolute -bottom-4 left-0 text-xs text-pink-400">تم التعديل</div>' : ''}
+          </div>
+        </div>`;
+    }
+    function escapeHTML(str) {
+      return (str||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function formatTime(ts) {
+      const d = new Date(ts);
+      return d.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+    }
+    // TTS
+    window.speakMsg = function(text) {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'ar-SA';
+      u.rate = 1;
+      window.speechSynthesis.speak(u);
+    };
+    ttsBtn.onclick = () => {
+      const txt = msgInput.value.trim();
+      if (txt) window.speakMsg(txt);
+    };
+
+    // Media upload
+    mediaBtn.onclick = () => mediaInput.click();
+    mediaInput.onchange = async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      // Limit media size to 5MB to avoid huge DB payloads; recommend using Firebase Storage instead
+      const MAX_BYTES = 5 * 1024 * 1024; // 5MB
+      if (file.size > MAX_BYTES) { showToast('حجم الملف أكبر من 5MB. استخدم ملفات أصغر.'); mediaInput.value = ''; return; }
+      let type = '';
+      if (file.type.startsWith('image/')) type = 'image';
+      else if (file.type.startsWith('video/')) type = 'video';
+      else if (file.type.startsWith('audio/')) type = 'audio';
+      else { showToast('نوع الملف غير مدعوم'); mediaInput.value = ''; return; }
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        sendMsg(type, ev.target.result).catch(() => showToast('فشل في إرسال الملف.'));
+      };
+      reader.readAsDataURL(file);
+      mediaInput.value = '';
+    };
+
+    // Message composition
+    let isTyping = false;
+    let typingTimeout;
+    
+    msgInput.addEventListener('input', () => {
+      if (!isTyping) {
+        isTyping = true;
+        db.ref('/typing/' + username).set(Date.now());
+      }
+      clearTimeout(typingTimeout);
+      typingTimeout = setTimeout(() => {
+        isTyping = false;
+        db.ref('/typing/' + username).remove();
+      }, 2000);
+    });
+
+    // Track typing users
+    db.ref('/typing').on('value', snap => {
+      const typing = snap.val() || {};
+      const typingUsers = Object.entries(typing)
+        .filter(([user, time]) => user !== username && Date.now() - time < 3000)
+        .map(([user]) => user);
+      
+      if (typingUsers.length) {
+        statusDiv.innerHTML = `<span class="text-pink-400">✍️ ${typingUsers.join(', ')} يكتب...</span>`;
+      } else {
+        statusDiv.innerHTML = connected ? 
+          '<span class="text-green-400">✅ متصل</span>' : 
+          '<span class="text-red-400">❌ غير متصل</span>';
+      }
+    });
+
+    // Send message
+    chatForm.onsubmit = e => {
+      e.preventDefault();
+      const txt = msgInput.value.trim();
+      if (txt) {
+        const btn = chatForm.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        btn.classList.add('loading');
+        sendMsg('text', txt).then(() => {
+          msgInput.value = '';
+          msgInput.style.height = 'auto';
+          btn.disabled = false;
+          btn.classList.remove('loading');
+          playSound('send');
+        });
+      }
+    };
+
+    msgInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.onsubmit(e);
+      }
+    });
+
+    // Send TTS message
+    ttsBtn.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      const txt = msgInput.value.trim();
+      if (txt) sendMsg('tts', txt);
+    });
+
+    // Message actions handlers
+    window.showMessageActions = (e, msgId, isSelf) => {
+      const menu = document.getElementById('msg-actions');
+      const target = e.target || e.srcElement;
+      const rect = target.getBoundingClientRect ? target.getBoundingClientRect() : { top: window.scrollY + 100, left: window.scrollX + 100 };
+      menu.style.top = `${rect.top}px`;
+      menu.style.left = `${rect.left}px`;
+      menu.classList.remove('hidden');
+      menu.dataset.msgId = msgId;
+      
+      // Show/hide delete option based on ownership
+      menu.querySelector('button:last-child').style.display = isSelf ? 'flex' : 'none';
+      
+      // Close menu when clicking outside
+      const closeMenu = (e) => {
+        if (!menu.contains(e.target)) {
+          menu.classList.add('hidden');
+          document.removeEventListener('click', closeMenu);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeMenu), 0);
+    };
+
+    // Forward message - simple implementation: copy to clipboard and show toast
+    window.forwardMessage = () => {
+      const msgId = document.getElementById('msg-actions').dataset.msgId;
+      const el = document.querySelector(`[data-msg-id="${msgId}"]`);
+      if (!el) { showToast('الرسالة غير موجودة'); document.getElementById('msg-actions').classList.add('hidden'); return; }
+      const txt = el.querySelector('.whitespace-pre-line')?.textContent || el.textContent || '';
+      navigator.clipboard.writeText(txt.substring(0, 10000)).then(() => {
+        showToast('تم نسخ الرسالة لإعادة توجيهها');
+        document.getElementById('msg-actions').classList.add('hidden');
+      }).catch(() => showToast('فشل في نسخ الرسالة'));
+    };
+
+    window.replyToMessage = async () => {
+      const msgId = document.getElementById('msg-actions').dataset.msgId;
+      const snap = await db.ref('/messages/' + msgId).once('value');
+      const msg = snap.val();
+      if (msg) {
+        msgInput.dataset.replyTo = JSON.stringify({
+          id: msgId,
+          user: msg.user,
+          content: msg.type === 'text' ? msg.content : `[${msg.type}]`
+        });
+        document.getElementById('msg-actions').classList.add('hidden');
+        msgInput.focus();
+      }
+    };
+
+    window.copyMessage = () => {
+      const msgId = document.getElementById('msg-actions').dataset.msgId;
+      const msg = document.querySelector(`[data-msg-id="${msgId}"]`);
+      if (msg) {
+        const content = msg.querySelector('.whitespace-pre-line')?.textContent;
+        if (content) {
+          navigator.clipboard.writeText(content);
+          showToast('تم نسخ الرسالة');
+        }
+      }
+      document.getElementById('msg-actions').classList.add('hidden');
+    };
+
+    window.deleteMessage = async () => {
+      const msgId = document.getElementById('msg-actions').dataset.msgId;
+      await db.ref('/messages/' + msgId).remove();
+      document.getElementById('msg-actions').classList.add('hidden');
+      showToast('تم حذف الرسالة');
+    };
+
+    window.reactToMessage = (e) => {
+      const msgId = document.getElementById('msg-actions').dataset.msgId;
+      const menu = document.getElementById('reactions-menu');
+      const rect = e.target.getBoundingClientRect();
+      menu.style.top = `${rect.bottom + 5}px`;
+      menu.style.left = `${rect.left}px`;
+      menu.classList.remove('hidden');
+      menu.dataset.msgId = msgId;
+      
+      const closeMenu = (e) => {
+        if (!menu.contains(e.target)) {
+          menu.classList.add('hidden');
+          document.removeEventListener('click', closeMenu);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeMenu), 0);
+    };
+
+    window.addReaction = async (emoji, msgId) => {
+      msgId = msgId || document.getElementById('reactions-menu').dataset.msgId;
+      const ref = db.ref(`/messages/${msgId}/reactions/${emoji}`);
+      const snap = await ref.once('value');
+      const users = snap.val() || [];
+      
+      if (users.includes(username)) {
+        await ref.set(users.filter(u => u !== username));
+      } else {
+        await ref.set([...users, username]);
+      }
+      
+      document.getElementById('reactions-menu').classList.add('hidden');
+    };
+
+    // Toast notification
+    function showToast(message) {
+      const toast = document.createElement('div');
+      toast.className = 'fixed bottom-4 right-4 bg-[#23233a] text-white px-4 py-2 rounded-lg shadow-lg z-50 fade visible-fade';
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => {
+        toast.classList.remove('visible-fade');
+        setTimeout(() => toast.remove(), 300);
+      }, 2000);
+    }
+
+    // Send message to Firebase
+    async function sendMsg(type, content) {
+      if (!username) {
+        showToast('يرجى إدخال اسم مستخدم أولاً');
+        return Promise.reject(new Error('no-username'));
+      }
+      const msg = {
+        user: username,
+        type,
+        content,
+        timestamp: Date.now(),
+        seen: ''
+      };
+      // Add reply-to if exists
+      const replyToData = msgInput.dataset.replyTo;
+      if (replyToData) {
+        msg.replyTo = JSON.parse(replyToData);
+        delete msgInput.dataset.replyTo;
+      }
+      return db.ref('/messages').push(msg).catch(err => {
+        console.error('sendMsg error', err);
+        showToast('خطأ في إرسال الرسالة');
+        throw err;
+      });
+    }
+
+    // Listen for messages with optimizations
+    let lastRenderedKey = null;
+    const messageCache = new Map();
+    const seenCache = new Set();
+
+    db.ref('/messages').on('value', snap => {
+      const msgs = snap.val() || {};
+      const entries = Object.entries(msgs);
+      
+      // Only clear and re-render if we have a completely new set of messages
+      if (entries.length === 0 || !messageCache.has(entries[entries.length - 1][0])) {
+        messagesDiv.innerHTML = '';
+        messageCache.clear();
+      }
+
+      let needsScroll = false;
+      let lastKey = null;
+
+      entries.forEach(([key, msg]) => {
+        if (!messageCache.has(key)) {
+          const self = msg.user === username;
+          const msgEl = document.createElement('div');
+          msgEl.innerHTML = renderMsg(msg, key, self);
+          msgEl.firstChild.classList.add('msg-enter');
+          messagesDiv.appendChild(msgEl.firstChild);
+          messageCache.set(key, true);
+          needsScroll = true;
+          
+          // Play sound for new messages
+          if (msg.timestamp > Date.now() - 1000 && msg.user !== username) {
+            playSound('receive');
+          }
+        }
+        lastKey = key;
+
+        // Handle seen status
+        if (msg.user !== username && !seenCache.has(key)) {
+          seenCache.add(key);
+          db.ref('/messages/' + key + '/seen').set(username).catch(err => {
+            console.error('set seen error', err);
+          });
+        }
+      });
+
+      if (lastKey) lastMsgKey = lastKey;
+      
+      // Smart scrolling - only scroll if we were already at bottom or have new messages
+      if (needsScroll && 
+          (messagesDiv.scrollTop + messagesDiv.clientHeight >= 
+           messagesDiv.scrollHeight - 100)) {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      }
+    });
+
+    // Responsive textarea
+    msgInput.addEventListener('input', e => {
+      msgInput.style.height = 'auto';
+      msgInput.style.height = (msgInput.scrollHeight) + 'px';
+    });
+
+    // Long-press (hold) support for mobile: show message actions
+    (function attachLongPress() {
+      let longPressTimer = null;
+      let currentTarget = null;
+      const LONG_PRESS_DURATION = 600; // ms
+
+      messagesDiv.addEventListener('touchstart', (ev) => {
+        const touch = ev.touches[0];
+        const el = document.elementFromPoint(touch.clientX, touch.clientY);
+        const msgEl = el ? el.closest('[data-msg-id]') : null;
+        if (!msgEl) return;
+        currentTarget = msgEl;
+        longPressTimer = setTimeout(() => {
+          const msgId = msgEl.getAttribute('data-msg-id');
+          const isSelf = msgEl.querySelector('.font-bold')?.textContent === username;
+          // Build a fake event where target is the element we measured
+          showMessageActions({ target: msgEl }, msgId, isSelf);
+        }, LONG_PRESS_DURATION);
+      }, { passive: true });
+
+      messagesDiv.addEventListener('touchend', () => {
+        if (longPressTimer) clearTimeout(longPressTimer);
+        longPressTimer = null;
+        currentTarget = null;
+      });
+
+      messagesDiv.addEventListener('touchcancel', () => {
+        if (longPressTimer) clearTimeout(longPressTimer);
+        longPressTimer = null;
+        currentTarget = null;
+      });
+    })();
+  </script>
+</body>
+</html>

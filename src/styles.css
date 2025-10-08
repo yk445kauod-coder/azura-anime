@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom minimal resets for the app */
+html, body { height: 100%; }
+body { background: #0f0f0f; }

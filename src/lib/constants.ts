@@ -1,0 +1,1 @@
+export const SECRET_CHAT_PASSWORD = "3000445";
