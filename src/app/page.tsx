@@ -7,6 +7,7 @@ import Experiments from "@/components/Experiments";
 import Assistant from "@/components/Assistant";
 import Compare from "@/components/Compare";
 import Insights from "@/components/Insights";
+import Reports from "@/components/Reports";
 
 const TABS = [
   { id: "overview", label: "Overview" },
@@ -14,6 +15,7 @@ const TABS = [
   { id: "explorer", label: "Experiment Explorer" },
   { id: "compare", label: "Comparative Analysis" },
   { id: "insights", label: "Fire Safety Insights" },
+  { id: "reports", label: "Research Reports" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -79,6 +81,7 @@ export default function Home() {
       {tab === "explorer" && <Explorer />}
       {tab === "compare" && <Compare />}
       {tab === "insights" && <Insights />}
+      {tab === "reports" && <Reports />}
 
       <footer className="muted" style={{ marginTop: 34 }}>
         IGNIS · corpus harvested from NASA Technical Reports Server (NTRS) · retrieval:

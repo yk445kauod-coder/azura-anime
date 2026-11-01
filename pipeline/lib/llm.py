@@ -7,8 +7,12 @@ the default order is ``gemini,agentrouter,openai,openrouter,ollama``.
 
   * ``gemini``      — Google AI Studio, OpenAI-compatible endpoint
                       (GEMINI_API_KEY, GEMINI_MODEL)
-  * ``agentrouter`` — OpenAI-compatible gateway
-                      (AGENTROUTER_API_KEY, AGENTROUTER_BASE_URL, AGENTROUTER_MODEL)
+  * ``agentrouter`` — unified gateway. Speaks the Anthropic Messages protocol by
+                      default (AGENTROUTER_API_KEY, AGENTROUTER_MODEL); set
+                      AGENTROUTER_STYLE=openai for the chat-completions protocol.
+                      AgentRouter's WAF fingerprints clients at the TLS layer and
+                      only allowlists the Anthropic/OpenAI SDK handshakes, so a
+                      plain requests call may be served a captcha page instead.
   * ``openai``      — any OpenAI-compatible endpoint
                       (OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL)
   * ``openrouter``  — OPENROUTER_API_KEY, OPENROUTER_MODEL
@@ -38,7 +42,11 @@ log = logging.getLogger("ignis.llm")
 DEFAULT_ORDER = ("gemini", "agentrouter", "openai", "openrouter", "ollama")
 
 GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
-AGENTROUTER_BASE = "https://agentrouter.org/v1"
+# AgentRouter's Anthropic-compatible base carries no /v1: the Messages path is
+# appended by the client, and a /v1 suffix would produce /v1/v1/messages.
+AGENTROUTER_ANTHROPIC_BASE = "https://agentrouter.org"
+AGENTROUTER_OPENAI_BASE = "https://agentrouter.org/v1"
+ANTHROPIC_VERSION = "2023-06-01"
 
 
 @dataclass
@@ -56,7 +64,7 @@ class Provider:
     base_url: str
     api_key: str
     model: str
-    style: str = "openai"  # "openai" | "ollama"
+    style: str = "openai"  # "openai" | "anthropic" | "ollama"
     headers: dict = field(default_factory=dict)
 
     @property
@@ -81,9 +89,16 @@ def _build(name: str) -> Provider | None:
         key = os.environ.get("AGENTROUTER_API_KEY")
         if not key:
             return None
+        style = os.environ.get("AGENTROUTER_STYLE", "anthropic").lower()
+        if style == "openai":
+            default_base = AGENTROUTER_OPENAI_BASE
+        else:
+            style = "anthropic"
+            default_base = AGENTROUTER_ANTHROPIC_BASE
         return Provider("agentrouter",
-                        os.environ.get("AGENTROUTER_BASE_URL", AGENTROUTER_BASE),
-                        key, _model_for("AGENTROUTER_MODEL", "deepseek-v4-flash"))
+                        os.environ.get("AGENTROUTER_BASE_URL", default_base),
+                        key, _model_for("AGENTROUTER_MODEL", "claude-opus-4-6"),
+                        style=style)
     if name == "openai":
         key = os.environ.get("OPENAI_API_KEY")
         if not key:
@@ -180,6 +195,8 @@ class LLM:
                  max_tokens: int, json_mode: bool) -> LLMResult:
         if p.style == "ollama":
             return self._call_ollama(p, system, user, temperature, json_mode)
+        if p.style == "anthropic":
+            return self._call_anthropic(p, system, user, temperature, max_tokens)
         return self._call_openai(p, system, user, temperature, max_tokens, json_mode)
 
     def _complete_one(self, p: Provider, system: str, user: str, temperature: float,
@@ -255,6 +272,44 @@ class LLM:
         data = r.json()
         return LLMResult((data.get("response") or "").strip(), p.model, p.name,
                          data.get("eval_count", 0))
+
+    def _call_anthropic(self, p: Provider, system: str, user: str, temperature: float,
+                        max_tokens: int) -> LLMResult:
+        """Anthropic Messages protocol (``POST {base}/v1/messages``).
+
+        AgentRouter allowlists this wire shape, so it is the default route there.
+        """
+        headers = {
+            "x-api-key": p.api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+            "content-type": "application/json",
+            **p.headers,
+        }
+        payload = {
+            "model": p.model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        r = requests.post(f"{p.base_url.rstrip('/')}/v1/messages", json=payload,
+                          headers=headers, timeout=self.timeout)
+        r.raise_for_status()
+        if "json" not in (r.headers.get("content-type") or ""):
+            # A gateway returned an HTML interstitial (WAF / maintenance page).
+            raise RuntimeError(f"{p.name} returned non-JSON content "
+                               f"({r.headers.get('content-type')})")
+        data = r.json()
+        if "content" not in data:
+            raise RuntimeError(f"{p.name} response missing 'content': {str(data)[:200]}")
+        text = "".join(
+            block.get("text", "")
+            for block in data["content"]
+            if isinstance(block, dict) and block.get("type") == "text"
+        ).strip()
+        usage = data.get("usage") or {}
+        tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+        return LLMResult(text, p.model, p.name, tokens)
 
     def _call_openai(self, p: Provider, system: str, user: str, temperature: float,
                      max_tokens: int, json_mode: bool) -> LLMResult:

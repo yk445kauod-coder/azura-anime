@@ -47,6 +47,10 @@ def _chain(monkeypatch, names=("gemini", "agentrouter")):
     monkeypatch.delenv("IGNIS_LLM_MODEL", raising=False)
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
     monkeypatch.delenv("AGENTROUTER_MODEL", raising=False)
+    # These cases exercise the chat-completions wire shape end to end; the
+    # Anthropic protocol has its own tests below.
+    monkeypatch.setenv("AGENTROUTER_STYLE", "openai")
+    monkeypatch.setenv("AGENTROUTER_BASE_URL", "https://agentrouter.org/v1")
     return llm_mod.LLM()
 
 
@@ -60,7 +64,7 @@ def test_chain_is_ordered_and_labelled(monkeypatch):
     assert llm.available
     assert [p.name for p in llm.providers] == ["gemini", "agentrouter"]
     assert llm.chain == ["gemini/gemini-3.1-flash-lite",
-                         "agentrouter/deepseek-v4-flash"]
+                         "agentrouter/claude-opus-4-6"]
 
 
 def test_provider_order_is_configurable(monkeypatch):
@@ -199,3 +203,90 @@ def test_non_retryable_error_fails_over_immediately(monkeypatch):
     monkeypatch.setattr(llm_mod.requests, "post", fake_post)
     assert llm.complete("s", "u").provider == "agentrouter"
     assert counts["gemini"] == 1, "should not retry a 404"
+
+
+# --------------------------------------------------------------------------- #
+# AgentRouter protocol handling
+# --------------------------------------------------------------------------- #
+def _anthropic_ok(text="from claude"):
+    return FakeResponse({
+        "content": [{"type": "text", "text": text}],
+        "usage": {"input_tokens": 5, "output_tokens": 3},
+    })
+
+
+def test_agentrouter_defaults_to_anthropic_messages_protocol(monkeypatch):
+    """AgentRouter's WAF allowlists the Messages wire shape, so it is the default."""
+    monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
+    monkeypatch.delenv("AGENTROUTER_STYLE", raising=False)
+    monkeypatch.delenv("AGENTROUTER_BASE_URL", raising=False)
+    provider = llm_mod._build("agentrouter")
+    assert provider.style == "anthropic"
+    # No /v1 suffix: the client appends /v1/messages itself.
+    assert provider.base_url == "https://agentrouter.org"
+    assert provider.model == "claude-opus-4-6"
+
+
+def test_agentrouter_style_openai_switches_protocol(monkeypatch):
+    monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
+    monkeypatch.setenv("AGENTROUTER_STYLE", "openai")
+    monkeypatch.delenv("AGENTROUTER_BASE_URL", raising=False)
+    provider = llm_mod._build("agentrouter")
+    assert provider.style == "openai"
+    assert provider.base_url == "https://agentrouter.org/v1"
+
+
+def test_anthropic_call_posts_messages_path_with_sdk_headers(monkeypatch):
+    monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS", "agentrouter")
+    monkeypatch.delenv("AGENTROUTER_BASE_URL", raising=False)
+    monkeypatch.delenv("AGENTROUTER_STYLE", raising=False)
+    llm = llm_mod.LLM()
+    seen = {}
+
+    def fake_post(url, **kw):
+        seen["url"] = url
+        seen["headers"] = kw["headers"]
+        seen["json"] = kw["json"]
+        return _anthropic_ok()
+
+    monkeypatch.setattr(llm_mod.requests, "post", fake_post)
+    result = llm.complete("sys prompt", "user prompt", max_tokens=256)
+
+    assert seen["url"] == "https://agentrouter.org/v1/messages"
+    assert seen["headers"]["x-api-key"] == "ak"
+    assert seen["headers"]["anthropic-version"] == llm_mod.ANTHROPIC_VERSION
+    assert "Authorization" not in seen["headers"], "Messages protocol uses x-api-key"
+    assert seen["json"]["system"] == "sys prompt"
+    assert seen["json"]["messages"] == [{"role": "user", "content": "user prompt"}]
+    assert seen["json"]["max_tokens"] == 256
+    assert result.text == "from claude"
+    assert result.provider == "agentrouter"
+    assert result.tokens == 8
+
+
+def test_anthropic_response_joins_text_blocks_and_ignores_others(monkeypatch):
+    monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS", "agentrouter")
+    monkeypatch.delenv("AGENTROUTER_BASE_URL", raising=False)
+    monkeypatch.delenv("AGENTROUTER_STYLE", raising=False)
+    llm = llm_mod.LLM()
+    monkeypatch.setattr(llm_mod.requests, "post", lambda url, **kw: FakeResponse({
+        "content": [{"type": "thinking", "thinking": "…"},
+                    {"type": "text", "text": "part one "},
+                    {"type": "text", "text": "part two"}],
+    }))
+    assert llm.complete("s", "u").text == "part one part two"
+
+
+def test_anthropic_missing_content_field_is_rejected(monkeypatch):
+    monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS", "agentrouter")
+    monkeypatch.delenv("AGENTROUTER_BASE_URL", raising=False)
+    monkeypatch.delenv("AGENTROUTER_STYLE", raising=False)
+    llm = llm_mod.LLM()
+    llm.retries = 1
+    monkeypatch.setattr(llm_mod.requests, "post",
+                        lambda url, **kw: FakeResponse({"error": "nope"}))
+    with pytest.raises(RuntimeError, match="missing 'content'"):
+        llm.complete("s", "u")

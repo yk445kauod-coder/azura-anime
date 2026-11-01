@@ -46,6 +46,21 @@ def main() -> int:
                                  WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
                    confidence DESC"""
         )}
+    elif action == "report":
+        from report import build_report, render_markdown
+
+        topic = (payload.get("topic") or payload.get("question") or "").strip()
+        if not topic:
+            print(json.dumps({"error": "missing 'topic'"}))
+            return 2
+        rep = build_report(
+            topic,
+            payload.get("questions"),
+            k=int(payload.get("k", 8)),
+            use_llm=bool(payload.get("use_llm", True)),
+            max_questions=payload.get("max_questions"),
+        )
+        result = {"report": rep, "markdown": render_markdown(rep)}
     else:
         question = (payload.get("question") or "").strip()
         if not question:

@@ -16,7 +16,9 @@
     "pipeline:upload": "python3 pipeline/upload_corpus.py",
     "pipeline:analyze": "python3 pipeline/analyze.py",
     "pipeline:all": "npm run db:migrate && npm run pipeline:collect && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze",
-    "pipeline:rebuild": "npm run db:migrate && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze"
+    "pipeline:rebuild": "npm run db:migrate && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze",
+    "pipeline:report": "python3 pipeline/report.py",
+    "pipeline:doctor": "python3 pipeline/llm_doctor.py"
   },
   "dependencies": {
     "next": "15.5.4",

@@ -1,0 +1,181 @@
+{
+  "overview": {
+    "documents": 206,
+    "documents_with_fulltext": 206,
+    "chunks": 5070,
+    "embeddings": 5070,
+    "experiments": 8,
+    "findings": 185,
+    "insights": 8,
+    "corpus_words": 1160751,
+    "corpus_chars": 6844756,
+    "artifact_bytes": "350079457"
+  },
+  "metrics": [
+    {
+      "metric": "pressure",
+      "n": 100,
+      "min_value": "0.0000",
+      "max_value": "827.0000",
+      "avg_value": "58.7559",
+      "unit": "atm"
+    },
+    {
+      "metric": "soot volume fraction",
+      "n": 33,
+      "min_value": "0.0000",
+      "max_value": "295.0000",
+      "avg_value": "15.6618",
+      "unit": "ppm"
+    },
+    {
+      "metric": "limiting oxygen index",
+      "n": 22,
+      "min_value": "2.0000",
+      "max_value": "83.0000",
+      "avg_value": "36.4773",
+      "unit": "%"
+    },
+    {
+      "metric": "flame temperature",
+      "n": 17,
+      "min_value": "7.0000",
+      "max_value": "2390.0000",
+      "avg_value": "1277.7941",
+      "unit": "K"
+    },
+    {
+      "metric": "gravity level",
+      "n": 8,
+      "min_value": "1.0000",
+      "max_value": "26.0000",
+      "avg_value": "7.8750",
+      "unit": "g"
+    },
+    {
+      "metric": "smoke particle size",
+      "n": 3,
+      "min_value": "2.5000",
+      "max_value": "249.0000",
+      "avg_value": "87.1667",
+      "unit": "nm"
+    }
+  ],
+  "experiment_coverage": [
+    {
+      "code": "SAME",
+      "name": "Smoke Aerosol Measurement Experiment",
+      "campaign": "SAME",
+      "documents": 26,
+      "findings": 0
+    },
+    {
+      "code": "SAFFIRE",
+      "name": "Spacecraft Fire Safety Experiment",
+      "campaign": "SAFFIRE",
+      "documents": 7,
+      "findings": 0
+    },
+    {
+      "code": "BASS",
+      "name": "Burning and Suppression of Solids",
+      "campaign": "BASS",
+      "documents": 5,
+      "findings": 0
+    },
+    {
+      "code": "BASS-II",
+      "name": "Burning and Suppression of Solids - II",
+      "campaign": "BASS",
+      "documents": 5,
+      "findings": 0
+    },
+    {
+      "code": "ACE",
+      "name": "Advanced Combustion via Microgravity Experiments",
+      "campaign": "ACE",
+      "documents": 3,
+      "findings": 0
+    },
+    {
+      "code": "SoFIE",
+      "name": "Solid Fuel Ignition and Extinction",
+      "campaign": "SoFIE",
+      "documents": 2,
+      "findings": 0
+    },
+    {
+      "code": "FLEX-2",
+      "name": "Flame Extinguishment Experiment - 2",
+      "campaign": "FLEX",
+      "documents": 1,
+      "findings": 0
+    },
+    {
+      "code": "CFI",
+      "name": "Cool Flames Investigation",
+      "campaign": "CFI",
+      "documents": 0,
+      "findings": 0
+    }
+  ],
+  "insights": [
+    {
+      "slug": "flame-spread-over-solid-fuels-in-microgravity-1",
+      "title": "Flame Spread Over Solid Fuels In Microgravity",
+      "severity": "high",
+      "confidence": 0.8,
+      "evidence_documents": 5
+    },
+    {
+      "slug": "flame-extinction-limits-and-quenching-in-microgravity-2",
+      "title": "Flame Extinction Limits And Quenching In Microgravity",
+      "severity": "high",
+      "confidence": 0.8,
+      "evidence_documents": 4
+    },
+    {
+      "slug": "limiting-oxygen-concentration-for-spacecraft-fire-safety-3",
+      "title": "Limiting Oxygen Concentration For Spacecraft Fire Safety",
+      "severity": "critical",
+      "confidence": 0.8,
+      "evidence_documents": 5
+    },
+    {
+      "slug": "smoke-and-soot-production-for-spacecraft-fire-detection-4",
+      "title": "Smoke And Soot Production For Spacecraft Fire Detection",
+      "severity": "medium",
+      "confidence": 0.8,
+      "evidence_documents": 6
+    },
+    {
+      "slug": "fire-suppression-agents-and-methods-in-microgravity-5",
+      "title": "Fire Suppression Agents And Methods In Microgravity",
+      "severity": "high",
+      "confidence": 0.8,
+      "evidence_documents": 6
+    },
+    {
+      "slug": "low-temperature-cool-flame-ignition-hazards-6",
+      "title": "Low-Temperature Cool Flame Ignition Hazards",
+      "severity": "medium",
+      "confidence": 0.8,
+      "evidence_documents": 3
+    },
+    {
+      "slug": "pressure-and-atmosphere-effects-on-spacecraft-flammability-7",
+      "title": "Pressure And Atmosphere Effects On Spacecraft Flammability",
+      "severity": "high",
+      "confidence": 0.8,
+      "evidence_documents": 4
+    },
+    {
+      "slug": "large-scale-fire-growth-in-spacecraft-saffire-lessons-8",
+      "title": "Large-Scale Fire Growth In Spacecraft (Saffire) Lessons",
+      "severity": "critical",
+      "confidence": 0.8,
+      "evidence_documents": 4
+    }
+  ],
+  "provider": "deterministic"
+}
