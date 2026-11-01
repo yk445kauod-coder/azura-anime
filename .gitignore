@@ -1,0 +1,32 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# data corpus (regenerable via `npm run pipeline:all`)
+data/raw/
+data/clean/
+data/manifests/*.jsonl
+data/manifests/*.csv
+!data/manifests/.gitkeep
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# misc
+.DS_Store
+*.log
+npm-debug.log*
+.vercel
+*.tsbuildinfo
+next-env.d.ts

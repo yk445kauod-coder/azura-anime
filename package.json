@@ -1,0 +1,33 @@
+{
+  "name": "ignis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "IGNIS — AI-powered research platform for NASA microgravity combustion and spacecraft fire-safety data",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "python3 pipeline/migrate.py",
+    "pipeline:collect": "python3 pipeline/collect.py",
+    "pipeline:clean": "python3 pipeline/clean.py",
+    "pipeline:index": "python3 pipeline/index_vectors.py",
+    "pipeline:analyze": "python3 pipeline/analyze.py",
+    "pipeline:all": "npm run db:migrate && npm run pipeline:collect && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze",
+    "pipeline:rebuild": "npm run db:migrate && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze"
+  },
+  "dependencies": {
+    "next": "15.5.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.19",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}
