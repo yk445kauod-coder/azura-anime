@@ -215,6 +215,63 @@ def _anthropic_ok(text="from claude"):
     })
 
 
+# --------------------------------------------------------------------------- #
+# Neon AI Gateway
+# --------------------------------------------------------------------------- #
+def test_neon_provider_builds_from_injected_env(monkeypatch):
+    """Neon injects a bare branch host; the unified dialect lives at /v1."""
+    monkeypatch.setenv("NEON_AI_GATEWAY_BASE_URL",
+                       "https://ep-x-api.ai.us-east-1.aws.neon.tech")
+    monkeypatch.setenv("NEON_AI_GATEWAY_TOKEN", "nt_live_abc")
+    monkeypatch.delenv("NEON_AI_GATEWAY_MODEL", raising=False)
+    monkeypatch.delenv("IGNIS_LLM_MODEL", raising=False)
+    provider = llm_mod._build("neon")
+    assert provider.style == "openai"
+    assert provider.base_url == "https://ep-x-api.ai.us-east-1.aws.neon.tech/v1"
+    assert provider.api_key == "nt_live_abc"
+    assert provider.model == "claude-sonnet-4-6"
+
+
+def test_neon_provider_needs_both_base_and_token(monkeypatch):
+    monkeypatch.setenv("NEON_AI_GATEWAY_BASE_URL", "https://ep-x-api.ai.us-east-1.aws.neon.tech")
+    monkeypatch.delenv("NEON_AI_GATEWAY_TOKEN", raising=False)
+    assert llm_mod._build("neon") is None
+    monkeypatch.delenv("NEON_AI_GATEWAY_BASE_URL", raising=False)
+    monkeypatch.setenv("NEON_AI_GATEWAY_TOKEN", "nt_live_abc")
+    assert llm_mod._build("neon") is None
+
+
+def test_neon_is_preferred_over_the_waf_blocked_gateway(monkeypatch):
+    """When Neon is configured it is tried before AgentRouter."""
+    monkeypatch.setenv("NEON_AI_GATEWAY_BASE_URL", "https://ep-x-api.ai.us-east-1.aws.neon.tech")
+    monkeypatch.setenv("NEON_AI_GATEWAY_TOKEN", "nt_live_abc")
+    monkeypatch.setenv("GEMINI_API_KEY", "gk")
+    monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
+    monkeypatch.delenv("IGNIS_LLM_PROVIDERS", raising=False)
+    assert [p.name for p in llm_mod.LLM().providers] == ["neon", "gemini", "agentrouter"]
+
+
+def test_neon_calls_the_chat_completions_route(monkeypatch):
+    monkeypatch.setenv("NEON_AI_GATEWAY_BASE_URL", "https://ep-x-api.ai.us-east-1.aws.neon.tech")
+    monkeypatch.setenv("NEON_AI_GATEWAY_TOKEN", "nt_live_abc")
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS", "neon")
+    monkeypatch.delenv("NEON_AI_GATEWAY_MODEL", raising=False)
+    llm = llm_mod.LLM()
+    seen = {}
+
+    def fake_post(url, **kw):
+        seen["url"] = url
+        seen["auth"] = kw["headers"]["Authorization"]
+        return _ok("from neon")
+
+    monkeypatch.setattr(llm_mod.requests, "post", fake_post)
+    result = llm.complete("s", "u")
+    assert seen["url"] == "https://ep-x-api.ai.us-east-1.aws.neon.tech/v1/chat/completions"
+    assert seen["auth"] == "Bearer nt_live_abc"
+    assert result.text == "from neon"
+    assert result.provider == "neon"
+
+
 def test_agentrouter_defaults_to_anthropic_messages_protocol(monkeypatch):
     """AgentRouter's WAF allowlists the Messages wire shape, so it is the default."""
     monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")

@@ -5,6 +5,12 @@ single slow or unreachable provider degrades the answer instead of failing the
 request. Configure the order with ``IGNIS_LLM_PROVIDERS`` (comma separated);
 the default order is ``gemini,agentrouter,openai,openrouter,ollama``.
 
+  * ``neon``        — Neon AI Gateway (Databricks-hosted). One Neon credential
+                      reaches Claude, GPT, Gemini and open-source models, and it
+                      is not behind a client-fingerprinting WAF, which makes it
+                      the reliable route when a third-party gateway blocks you.
+                      (NEON_AI_GATEWAY_BASE_URL, NEON_AI_GATEWAY_TOKEN,
+                      NEON_AI_GATEWAY_MODEL)
   * ``gemini``      — Google AI Studio, OpenAI-compatible endpoint
                       (GEMINI_API_KEY, GEMINI_MODEL)
   * ``agentrouter`` — unified gateway. Speaks the Anthropic Messages protocol by
@@ -39,7 +45,7 @@ from .db import connect
 
 log = logging.getLogger("ignis.llm")
 
-DEFAULT_ORDER = ("gemini", "agentrouter", "openai", "openrouter", "ollama")
+DEFAULT_ORDER = ("neon", "gemini", "agentrouter", "openai", "openrouter", "ollama")
 
 GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 # AgentRouter's Anthropic-compatible base carries no /v1: the Messages path is
@@ -78,6 +84,14 @@ def _model_for(env: str, default: str) -> str:
 
 
 def _build(name: str) -> Provider | None:
+    if name == "neon":
+        base = os.environ.get("NEON_AI_GATEWAY_BASE_URL")
+        token = os.environ.get("NEON_AI_GATEWAY_TOKEN")
+        if not (base and token):
+            return None
+        # The bare branch host carries no path; the unified dialect lives at /v1.
+        return Provider("neon", f"{base.rstrip('/')}/v1", token,
+                        _model_for("NEON_AI_GATEWAY_MODEL", "claude-sonnet-4-6"))
     if name == "gemini":
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
