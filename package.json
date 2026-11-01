@@ -2,7 +2,7 @@
   "name": "ignis",
   "version": "0.1.0",
   "private": true,
-  "description": "IGNIS — AI-powered research platform for NASA microgravity combustion and spacecraft fire-safety data",
+  "description": "IGNIS \u2014 AI-powered research platform for NASA microgravity combustion and spacecraft fire-safety data",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -13,6 +13,7 @@
     "pipeline:collect": "python3 pipeline/collect.py",
     "pipeline:clean": "python3 pipeline/clean.py",
     "pipeline:index": "python3 pipeline/index_vectors.py",
+    "pipeline:upload": "python3 pipeline/upload_corpus.py",
     "pipeline:analyze": "python3 pipeline/analyze.py",
     "pipeline:all": "npm run db:migrate && npm run pipeline:collect && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze",
     "pipeline:rebuild": "npm run db:migrate && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze"
