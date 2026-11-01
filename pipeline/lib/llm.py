@@ -5,6 +5,11 @@ single slow or unreachable provider degrades the answer instead of failing the
 request. Configure the order with ``IGNIS_LLM_PROVIDERS`` (comma separated);
 the default order is ``gemini,agentrouter,openai,openrouter,ollama``.
 
+  * ``cloudflare``  — Cloudflare Workers AI, free tier. Runs open models
+                      (Llama, Qwen, GPT-OSS, Mistral) on Cloudflare's edge, so
+                      requests never touch a third-party WAF.
+                      (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN,
+                      CLOUDFLARE_MODEL)
   * ``neon``        — Neon AI Gateway (Databricks-hosted). One Neon credential
                       reaches Claude, GPT, Gemini and open-source models, and it
                       is not behind a client-fingerprinting WAF, which makes it
@@ -45,13 +50,15 @@ from .db import connect
 
 log = logging.getLogger("ignis.llm")
 
-DEFAULT_ORDER = ("neon", "gemini", "agentrouter", "openai", "openrouter", "ollama")
+DEFAULT_ORDER = ("cloudflare", "neon", "gemini", "agentrouter", "openai",
+                 "openrouter", "ollama")
 
 GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 # AgentRouter's Anthropic-compatible base carries no /v1: the Messages path is
 # appended by the client, and a /v1 suffix would produce /v1/v1/messages.
 AGENTROUTER_ANTHROPIC_BASE = "https://agentrouter.org"
 AGENTROUTER_OPENAI_BASE = "https://agentrouter.org/v1"
+CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4/accounts"
 ANTHROPIC_VERSION = "2023-06-01"
 
 
@@ -72,6 +79,9 @@ class Provider:
     model: str
     style: str = "openai"  # "openai" | "anthropic" | "ollama"
     headers: dict = field(default_factory=dict)
+    # Reasoning models spend budget on hidden thinking tokens, so a small
+    # caller-supplied max_tokens can leave the visible answer empty.
+    min_max_tokens: int = 0
 
     @property
     def label(self) -> str:
@@ -84,6 +94,16 @@ def _model_for(env: str, default: str) -> str:
 
 
 def _build(name: str) -> Provider | None:
+    if name == "cloudflare":
+        account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+        token = os.environ.get("CLOUDFLARE_API_TOKEN")
+        if not (account and token):
+            return None
+        return Provider("cloudflare",
+                        f"{CLOUDFLARE_API_BASE}/{account}/ai/v1",
+                        token, _model_for("CLOUDFLARE_MODEL",
+                                          "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+                        min_max_tokens=1024)
     if name == "neon":
         base = os.environ.get("NEON_AI_GATEWAY_BASE_URL")
         token = os.environ.get("NEON_AI_GATEWAY_TOKEN")
@@ -211,7 +231,8 @@ class LLM:
             return self._call_ollama(p, system, user, temperature, json_mode)
         if p.style == "anthropic":
             return self._call_anthropic(p, system, user, temperature, max_tokens)
-        return self._call_openai(p, system, user, temperature, max_tokens, json_mode)
+        return self._call_openai(p, system, user, temperature,
+                                 max(max_tokens, p.min_max_tokens), json_mode)
 
     def _complete_one(self, p: Provider, system: str, user: str, temperature: float,
                       max_tokens: int, json_mode: bool) -> LLMResult:

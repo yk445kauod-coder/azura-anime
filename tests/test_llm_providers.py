@@ -32,6 +32,25 @@ class FakeResponse:
         return self._payload
 
 
+PROVIDER_ENV_VARS = (
+    "GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_BASE_URL",
+    "AGENTROUTER_API_KEY", "AGENTROUTER_MODEL", "AGENTROUTER_BASE_URL", "AGENTROUTER_STYLE",
+    "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL",
+    "OPENROUTER_API_KEY", "OPENROUTER_MODEL",
+    "OLLAMA_BASE_URL", "OLLAMA_MODEL",
+    "NEON_AI_GATEWAY_BASE_URL", "NEON_AI_GATEWAY_TOKEN", "NEON_AI_GATEWAY_MODEL",
+    "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_MODEL",
+    "IGNIS_LLM_MODEL", "IGNIS_LLM_PROVIDERS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clean_provider_env(monkeypatch):
+    """Strip every provider variable so results do not depend on the local .env."""
+    for var in PROVIDER_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _no_cache(monkeypatch):
     monkeypatch.setattr(llm_mod.LLM, "_cache_get", lambda self, key: None)
@@ -72,10 +91,7 @@ def test_provider_order_is_configurable(monkeypatch):
     assert [p.name for p in llm.providers] == ["agentrouter", "gemini"]
 
 
-def test_no_keys_means_unavailable(monkeypatch):
-    for var in ("GEMINI_API_KEY", "AGENTROUTER_API_KEY", "OPENAI_API_KEY",
-                "OPENROUTER_API_KEY", "OLLAMA_BASE_URL"):
-        monkeypatch.delenv(var, raising=False)
+def test_no_keys_means_unavailable():
     assert llm_mod.LLM().available is False
 
 
@@ -216,6 +232,83 @@ def _anthropic_ok(text="from claude"):
 
 
 # --------------------------------------------------------------------------- #
+# Cloudflare Workers AI
+# --------------------------------------------------------------------------- #
+def test_cloudflare_provider_builds_account_scoped_endpoint(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cftok")
+    monkeypatch.delenv("CLOUDFLARE_MODEL", raising=False)
+    monkeypatch.delenv("IGNIS_LLM_MODEL", raising=False)
+    provider = llm_mod._build("cloudflare")
+    assert provider.style == "openai"
+    assert provider.base_url == (
+        "https://api.cloudflare.com/client/v4/accounts/acct123/ai/v1")
+    assert provider.api_key == "cftok"
+    assert provider.model == "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
+
+def test_cloudflare_provider_needs_both_account_and_token(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
+    assert llm_mod._build("cloudflare") is None
+    monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cftok")
+    assert llm_mod._build("cloudflare") is None
+
+
+def test_cloudflare_calls_the_openai_compatible_route(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cftok")
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS", "cloudflare")
+    monkeypatch.delenv("CLOUDFLARE_MODEL", raising=False)
+    llm = llm_mod.LLM()
+    seen = {}
+
+    def fake_post(url, **kw):
+        seen["url"] = url
+        seen["auth"] = kw["headers"]["Authorization"]
+        return _ok("from cloudflare")
+
+    monkeypatch.setattr(llm_mod.requests, "post", fake_post)
+    result = llm.complete("s", "u")
+    assert seen["url"] == (
+        "https://api.cloudflare.com/client/v4/accounts/acct123/ai/v1/chat/completions")
+    assert seen["auth"] == "Bearer cftok"
+    assert result.text == "from cloudflare"
+    assert result.provider == "cloudflare"
+
+
+def test_cloudflare_raises_a_tiny_token_budget_for_reasoning_models(monkeypatch):
+    """Hidden reasoning tokens can otherwise consume the whole budget."""
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cftok")
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS", "cloudflare")
+    llm = llm_mod.LLM()
+    seen = {}
+
+    def fake_post(url, **kw):
+        seen["max_tokens"] = kw["json"]["max_tokens"]
+        return _ok("ok")
+
+    monkeypatch.setattr(llm_mod.requests, "post", fake_post)
+    llm.complete("s", "u", max_tokens=256)
+    assert seen["max_tokens"] == 1024, "a small budget is raised to the floor"
+
+    llm.complete("s", "u", max_tokens=4000)
+    assert seen["max_tokens"] == 4000, "a larger caller budget is respected"
+
+
+def test_cloudflare_is_first_in_the_default_chain(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cftok")
+    monkeypatch.setenv("GEMINI_API_KEY", "gk")
+    monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
+    monkeypatch.delenv("IGNIS_LLM_PROVIDERS", raising=False)
+    assert [p.name for p in llm_mod.LLM().providers] == [
+        "cloudflare", "gemini", "agentrouter"]
+
+
+# --------------------------------------------------------------------------- #
 # Neon AI Gateway
 # --------------------------------------------------------------------------- #
 def test_neon_provider_builds_from_injected_env(monkeypatch):
@@ -241,14 +334,18 @@ def test_neon_provider_needs_both_base_and_token(monkeypatch):
     assert llm_mod._build("neon") is None
 
 
-def test_neon_is_preferred_over_the_waf_blocked_gateway(monkeypatch):
-    """When Neon is configured it is tried before AgentRouter."""
+def test_self_hosted_credentials_are_tried_before_the_waf_blocked_gateway(monkeypatch):
+    """Cloudflare and Neon are account-scoped, so they precede AgentRouter."""
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cftok")
     monkeypatch.setenv("NEON_AI_GATEWAY_BASE_URL", "https://ep-x-api.ai.us-east-1.aws.neon.tech")
     monkeypatch.setenv("NEON_AI_GATEWAY_TOKEN", "nt_live_abc")
     monkeypatch.setenv("GEMINI_API_KEY", "gk")
     monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
-    monkeypatch.delenv("IGNIS_LLM_PROVIDERS", raising=False)
-    assert [p.name for p in llm_mod.LLM().providers] == ["neon", "gemini", "agentrouter"]
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS",
+                       "cloudflare,neon,gemini,agentrouter")
+    assert [p.name for p in llm_mod.LLM().providers] == [
+        "cloudflare", "neon", "gemini", "agentrouter"]
 
 
 def test_neon_calls_the_chat_completions_route(monkeypatch):
