@@ -296,9 +296,7 @@ def run_agent(
     use_llm: bool = True,
 ) -> AgentResult:
     t0 = time.time()
-    llm = LLM() if use_llm else LLM(model="__disabled__")
-    if not use_llm:
-        llm.provider = "none"
+    llm = LLM(enabled=use_llm)
 
     run_id = str(uuid.uuid4())
     trace: list[dict] = []
