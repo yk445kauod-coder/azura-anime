@@ -89,6 +89,7 @@ def sha256_bytes(data: bytes) -> str:
 
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'\-]*")
 _SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(])")
+_HTML = re.compile(r"</?[A-Za-z][A-Za-z0-9]*(?:\s[^<>]{0,200})?/?>|&(?:nbsp|amp|lt|gt|quot|#\d+);")
 
 # A line is a paragraph terminator when it ends in terminal punctuation; a line
 # beginning with one of these markers also starts a new logical unit.
@@ -127,6 +128,7 @@ def words(text: str) -> list[str]:
 
 
 def sentences(text: str) -> list[str]:
+    text = _HTML.sub(" ", text)  # NTRS HTML full text carries stray markup
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"(\w)-\n(?=[a-z])", r"\1", text)  # rejoin hyphenated wraps
     out: list[str] = []

@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -27,7 +28,8 @@ import psycopg  # noqa: E402
 from lib import config  # noqa: E402
 from lib.db import connect, execute, fetch_all, finish_pipeline_run, start_pipeline_run  # noqa: E402
 from lib.llm import LLM  # noqa: E402
-from lib.retrieve import retrieve  # noqa: E402
+from lib.retrieve import retrieve, _query_terms  # noqa: E402
+from lib.synth import best_sentences  # noqa: E402
 
 log = logging.getLogger("ignis.analyze")
 
@@ -88,9 +90,8 @@ def experiment_coverage() -> list[dict]:
     )
 
 
-def topic_evidence(question: str, k: int = 5) -> list[dict]:
-    hits = retrieve(question, k=k, pool=60)
-    return [h.as_dict() for h in hits]
+def topic_evidence(question: str, k: int = 5) -> list[Hit]:
+    return retrieve(question, k=k, pool=60)
 
 
 INSIGHT_SYSTEM = (
@@ -110,8 +111,21 @@ def _slug(title: str, idx: int) -> str:
     return f"{base or 'insight'}-{idx}"
 
 
+_REF_LIKE = re.compile(
+    r"(NASA/TM|NASA/CR|AIAA\s+\d|^\s*\d{4}\s*$|\bpp\.\s*\d|"
+    r"[A-Z][a-z]+,\s*[A-Z]\.|Proc\.|Proceedings of)",
+)
+
+
+def _tidy(text: str, limit: int = 300) -> str:
+    """Collapse PDF line breaks and trim a passage to clean prose."""
+    text = re.sub(r"(\w)-\n(?=[a-z])", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit].strip()
+
+
 def build_deterministic_insight(topic: str, category: str, severity: str,
-                                evidence: list[dict], stats: dict) -> dict:
+                                evidence: list[Hit], stats: dict) -> dict:
     if not evidence:
         return {
             "title": f"Coverage gap: {topic}",
@@ -120,9 +134,22 @@ def build_deterministic_insight(topic: str, category: str, severity: str,
                      f"negative result; the topic should be revisited as more NTRS material is ingested."),
             "severity": "info", "confidence": 0.25,
         }
-    top = evidence[:3]
-    lines = [f"{h['content'][:340].strip()} [{i}]" for i, h in enumerate(top, 1)]
-    titles = "; ".join(sorted({h["title"][:70] for h in evidence[:4]}))
+    terms = _query_terms(topic)
+    # Prefer passages that read as prose; reference lists and bibliographies make
+    # the insight unreadable even though they match the topic terms well.
+    usable = [h for h in evidence if not _REF_LIKE.search(h.content[:400])] or evidence
+
+    quotes: list[str] = []
+    for h in usable:
+        for s in best_sentences(h, terms, max_n=2):
+            quotes.append(s)
+        if len(quotes) >= 4:
+            break
+    if not quotes:
+        quotes = [_tidy(h.content) for h in usable[:2]]
+    lines = [f"{q} [{i}]" for i, q in enumerate(quotes[:4], 1)]
+
+    titles = "; ".join(sorted({h.title[:70] for h in evidence[:4]}))
     body = (
         f"Across {stats['documents']} NASA documents and {stats['chunks']} indexed passages, "
         f"the corpus shows consistent treatment of {topic}. "
@@ -134,7 +161,7 @@ def build_deterministic_insight(topic: str, category: str, severity: str,
         + "Limitation: statements are drawn from heterogeneous experiments with differing "
           "gravity levels, pressures and O2 fractions; compare conditions before combining values."
     )
-    avg = sum(h["final_score"] for h in top) / len(top)
+    avg = sum(h.final_score for h in usable[:3]) / max(1, len(usable[:3]))
     return {"title": topic.title(), "body": body, "severity": severity,
             "confidence": round(min(0.8, 0.35 + avg), 3)}
 
@@ -161,7 +188,7 @@ def main() -> int:
 
     for idx, (topic, category, severity) in enumerate(topics, 1):
         evidence = topic_evidence(topic, k=6)
-        doc_ids = sorted({h["document_id"] for h in evidence})
+        doc_ids = sorted({h.document_id for h in evidence})
         finding_rows = fetch_all(
             "SELECT id FROM ignis.finding WHERE document_id = ANY(%s) LIMIT 50", (doc_ids,)
         )
@@ -169,7 +196,7 @@ def main() -> int:
 
         if use_llm and evidence:
             blocks = "\n\n".join(
-                f"[{i}] {h['title']} (NTRS {h['source_id']})\n{h['content'][:1200]}"
+                f"[{i}] {h.title} (NTRS {h.source_id})\n{h.content[:1200]}"
                 for i, h in enumerate(evidence[:5], 1)
             )
             try:
