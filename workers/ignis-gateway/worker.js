@@ -42,6 +42,9 @@ function toResponsesBody(chat) {
   // No cap by default: caller may opt into a limit via an explicit max_output_tokens.
   if (chat.max_output_tokens) body.max_output_tokens = chat.max_output_tokens;
   else if (chat.max_tokens && !chat.ignore_max_tokens) body.max_output_tokens = chat.max_tokens;
+  // Reasoning models otherwise spend the whole output budget on hidden reasoning
+  // and return no visible text, so callers must be able to dial effort down.
+  if (chat.reasoning_effort) body.reasoning = { effort: chat.reasoning_effort };
   if (typeof chat.temperature === "number") body.temperature = chat.temperature;
   if (chat.response_format && chat.response_format.type === "json_object") {
     body.text = { format: { type: "json_object" } };

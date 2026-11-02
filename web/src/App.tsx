@@ -9,7 +9,7 @@ import Reports from "@/components/Reports";
 
 const TABS = [
   { id: "overview", label: "Overview" },
-  { id: "assistant", label: "AI Research Assistant" },
+  { id: "assistant", label: "AI Research Agent" },
   { id: "explorer", label: "Experiment Explorer" },
   { id: "compare", label: "Comparative Analysis" },
   { id: "insights", label: "Fire Safety Insights" },

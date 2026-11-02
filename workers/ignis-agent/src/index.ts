@@ -217,8 +217,20 @@ async function retrieve(env: Env, question: string, k: number): Promise<Hit[]> {
   return mmrDiversify(hits, k);
 }
 
+/** Retrieval plus the grading step, so callers can report what happened. */
+async function retrieveGraded(env: Env, question: string, k: number): Promise<Hit[]> {
+  const qvec = await embedOne(env, question);
+  const raw = await hybridSearch(env, question, qvec, k, 80);
+  rerank(question, raw);
+  smartRank(raw, question);
+  const hits = mmrDiversify(raw, k);
+  (hits as any).verdict = heuristicGrade(hits).verdict;
+  return hits;
+}
+
 async function llmComplete(env: Env, system: string, user: string, model: string,
-                           jsonMode = false): Promise<string> {
+                           jsonMode = false, maxTokens = 700,
+                           effort = "low"): Promise<string> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (env.IGNIS_PROXY_TOKEN) headers["authorization"] = `Bearer ${env.IGNIS_PROXY_TOKEN}`;
   const payload: any = {
@@ -228,6 +240,8 @@ async function llmComplete(env: Env, system: string, user: string, model: string
       { role: "user", content: user },
     ],
     stream: false,
+    max_tokens: maxTokens,
+    reasoning_effort: effort,
   };
   if (jsonMode && !model.startsWith("gpt-5.6")) payload.response_format = { type: "json_object" };
   const res = await gatewayFetch(env, "/v1/chat/completions", {
@@ -238,8 +252,15 @@ async function llmComplete(env: Env, system: string, user: string, model: string
     console.error(`llm ${model} http ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
     throw new Error(`LLM ${model} ${res.status}: ${data?.error?.message ?? JSON.stringify(data).slice(0, 200)}`);
   }
-  const text = data?.choices?.[0]?.message?.content ?? "";
-  if (!text.trim()) throw new Error(`LLM ${model} returned empty content`);
+  const choice = data?.choices?.[0];
+  const text = choice?.message?.content ?? "";
+  if (!text.trim()) {
+    // A reasoning model can exhaust the budget before emitting any text.
+    throw new Error(`LLM ${model} returned empty content (finish_reason=${choice?.finish_reason ?? "unknown"}, tokens=${data?.usage?.completion_tokens ?? "?"})`);
+  }
+  if (choice?.finish_reason === "incomplete") {
+    console.error(`llm ${model} truncated: ${text.length} chars, ${data?.usage?.completion_tokens} tokens`);
+  }
   return text.trim();
 }
 
@@ -286,15 +307,15 @@ const PLAN_SYSTEM =
 
 const SYNTH_SYSTEM =
   "You are IGNIS, a scientific research analyst specialising in microgravity combustion " +
-  "and spacecraft fire safety. Answer ONLY from the provided evidence. " +
-  "Cite every factual claim with bracketed evidence numbers like [2]. " +
-  "If the evidence is insufficient, say so explicitly. " +
+  "and spacecraft fire safety. Answer ONLY from the numbered evidence blocks. " +
+  "Cite every factual sentence with bracketed evidence numbers like [2] — at least two " +
+  "citations, each pointing at a different block where possible. " +
+  "Extract concrete quantitative results when present (spread rates, oxygen or pressure " +
+  "limits, temperatures, experiment names) and cite them. Only say the evidence is " +
+  "insufficient if the blocks genuinely contain nothing relevant to the question. " +
   "Never invent values, experiment names, or citations. " +
-  'Emit STRICT JSON only — no markdown fences, no prose around the object. ' +
-  'The "answer" value must be one line (no literal newline characters, no outer ' +
-  'double quotes; if it contains quotes, use single quotes). Format: ' +
-  '{"answer": string (concise markdown with [n] citations), "claims": ' +
-  '[{"claim": string, "evidence": int, "quote": string}], "confidence": 0..1}';
+  "Reply with plain markdown only: 3-5 short sentences, no preamble, no headings, " +
+  "no JSON, no code fences.";
 
 const EXPANSIONS: Record<string, string[]> = {
   "flame spread": ["flame spread rate", "counterflow flame spread", "opposed flow spread"],
@@ -394,9 +415,11 @@ function scheduleHeuristic(question: string): string[] {
   return subs.slice(0, 4);
 }
 
-async function plan(env: Env, question: string, model: string): Promise<{ subs: string[]; terms: string[] }> {
+async function plan(env: Env, question: string, model: string,
+                    memoryContext = ""): Promise<{ subs: string[]; terms: string[] }> {
   try {
-    const raw = await llmComplete(env, PLAN_SYSTEM, `Question: ${question}\n\n`, model, true);
+    const memoryBlock = memoryContext ? `\n\nRelevant memory from earlier sessions:\n${memoryContext}\n` : "";
+    const raw = await llmComplete(env, PLAN_SYSTEM, `Question: ${question}${memoryBlock}\n\n`, model, true, 500);
     const data = parseJsonObject(raw);
     const subs = (data.sub_questions ?? []).filter((s: any) => typeof s === "string" && s.length > 4).slice(0, 4);
     const terms = (data.key_terms ?? []).filter((t: any) => typeof t === "string").slice(0, 12);
@@ -409,34 +432,55 @@ async function plan(env: Env, question: string, model: string): Promise<{ subs: 
 
 async function synthesizeWithLLM(env: Env, question: string, hits: Hit[],
                                  subQuestions: string[], model: string): Promise<{ answer: string; claims: any[]; confidence: number }> {
-  const evidenceBlocks = hits.slice(0, 3).map((h, i) =>
-    `[${i + 1}] ${h.title} (NTRS ${h.source_id}; section: ${h.section_path ?? h.kind})\n${h.content.slice(0, 350).trim()}`);
+  const evidenceBlocks = hits.slice(0, 5).map((h, i) =>
+    `[${i + 1}] ${h.title} (NTRS ${h.source_id}; section: ${h.section_path ?? h.kind})\n${h.content.slice(0, 900).trim()}`);
   const evidence = evidenceBlocks.join("\n\n");
   let user = `Question: ${question}\n\nEvidence:\n${evidence}`;
   if (subQuestions.length) user += `\n\nSub-questions to address: ${subQuestions.join("; ")}`;
 
-  try {
-    const raw = await llmComplete(env, SYNTH_SYSTEM, user, model, true);
-    const data = parseJsonObject(raw);
-    const answer = String(data.answer ?? "").trim();
-    if (!answer) throw new Error(`empty answer; raw=${raw.slice(0, 200)}`);
-    const claims: any[] = [];
-    for (const c of data.claims ?? []) {
-      const ev = Number(c.evidence ?? 1);
-      const hit = ev >= 1 && ev <= hits.length ? hits[ev - 1] : hits[0];
-      if (!hit) continue;
-      claims.push({
-        claim: String(c.claim ?? "").slice(0, 1000), chunk_id: hit.chunk_id, document_id: hit.document_id,
-        source_id: hit.source_id, title: hit.title, quote: String(c.quote ?? "").slice(0, 1000),
-        support_score: hit.final_score, landing_url: hit.landing_url, section: hit.section_path || hit.kind,
-      });
+  // A reasoning model occasionally spends its whole budget on hidden reasoning
+  // and returns no text, so give the retry a larger output budget.
+  let lastErr: any = null;
+  for (const budget of [900, 2000]) {
+    try {
+      const raw = await llmComplete(env, SYNTH_SYSTEM, user, model, false, budget);
+      const answer = raw.trim();
+      if (!answer) throw new Error("empty answer");
+      const claims = claimsFromCitations(answer, hits);
+      return { answer, claims, confidence: claims.length ? Math.min(0.95, 0.62 + 0.08 * claims.length) : 0.2 };
+    } catch (err: any) {
+      lastErr = err;
+      console.error(`synth attempt (${budget}): ${String(err?.message ?? err).slice(0, 200)}`);
     }
-    const confidence = Number(data.confidence);
-    return { answer, claims, confidence: Number.isFinite(confidence) ? confidence : Math.min(0.9, 0.4 + 0.05 * claims.length) };
-  } catch (err: any) {
-    console.error(`synth fallback: ${String(err?.message ?? err).slice(0, 300)}`);
-    return synthesizeExtractive(question, hits);
   }
+  console.error(`synth fallback: ${String(lastErr?.message ?? lastErr).slice(0, 300)}`);
+  return synthesizeExtractive(question, hits);
+}
+
+/**
+ * Build cited claims from the `[n]` markers in a generated answer.
+ *
+ * The model only has to pick an evidence number, so every claim is guaranteed to
+ * point at a real passage, and the quote is taken from that passage rather than
+ * reproduced by the model. Confidence tracks how many distinct sources were cited.
+ */
+function claimsFromCitations(answer: string, hits: Hit[]): any[] {
+  const seen = new Set<number>();
+  const claims: any[] = [];
+  for (const m of answer.matchAll(/\[(\d+)\]/g)) {
+    const n = Number(m[1]);
+    if (!Number.isInteger(n) || n < 1 || n > hits.length || seen.has(n)) continue;
+    seen.add(n);
+    const hit = hits[n - 1];
+    const quote = hit.content.trim().slice(0, 240);
+    claims.push({
+      claim: quote, chunk_id: hit.chunk_id, document_id: hit.document_id,
+      source_id: hit.source_id, title: hit.title, quote,
+      support_score: hit.final_score, landing_url: hit.landing_url,
+      section: hit.section_path || hit.kind,
+    });
+  }
+  return claims;
 }
 
 const cors: Record<string, string> = {
@@ -456,57 +500,145 @@ async function runAgent(
   model: string | undefined,
   k: number,
   emit: (node: string, data: any) => void,
+  conversationId?: string,
 ): Promise<any> {
+  const started = Date.now();
+  const runId = crypto.randomUUID();
+  const trace: any[] = [];
+  const step = (node: string, data: any) => {
+    trace.push({ node, ...data, t_ms: Date.now() - started });
+    emit(node, data);
+  };
+
+  // ---- memory recall (both modes) ----
+  let memoryContext = "";
+  try {
+    const recalled = await memoryRecall(env, question, 4, conversationId);
+    if (recalled.length) {
+      memoryContext = recalled.map((r) => `[${r.kind}] ${r.content}`).join("\n");
+      step("memory", { n_recalled: recalled.length, contents: recalled.map((r) => r.content) });
+    }
+  } catch { /* memory is best-effort */ }
+
+  let subs: string[];
   if (mode === "deep") {
     const deepModel = model || "gpt-5.6-sol";
-    emit("mode", { mode, use_llm: true, provider: "ignis-agent", model: deepModel });
-    const { subs } = await plan(env, question, deepModel);
-    emit("plan", { sub_questions: subs });
+    step("mode", { mode, use_llm: true, provider: "ignis-agent", model: deepModel, max_iterations: 2 });
+    const planned = await plan(env, question, deepModel, memoryContext);
+    subs = planned.subs;
+  } else {
+    const fastModel = model || "gpt-5.6-sol";
+    step("mode", { mode, use_llm: true, provider: "ignis-agent", model: fastModel, max_iterations: 1 });
+    subs = [question];
+  }
+  step("plan", { sub_questions: subs });
 
-    const allHits: Hit[] = [];
-    for (const sq of subs) {
-      const hits = await retrieve(env, sq, 4);
-      for (const h of hits) h.sub_question = sq;
-      allHits.push(...hits);
-    }
-    emit("retrieve", { iteration: 0, sub_questions: subs, hits: allHits.length });
-
-    const seen = new Set<number>();
-    const ranked = allHits.filter((h) => { if (seen.has(h.chunk_id)) return false; seen.add(h.chunk_id); return true; });
-    ranked.sort((a, b) => b.final_score - a.final_score);
-    const relevant = ranked.slice(0, k);
-
-    const synth = await synthesizeWithLLM(env, question, relevant, subs, deepModel);
-    const hitsByChunk = new Map(relevant.map((h) => [h.chunk_id, h]));
-    const verified = verifyClaims(synth.claims, hitsByChunk);
-    const confidence = Math.round(Math.min(0.95, 0.55 * synth.confidence + 0.45 * verified.ratio) * 1000) / 1000;
-    emit("synthesize", { provider: "ignis-agent", model: deepModel, claims: verified.claims.length });
-    return {
-      question, answer: synth.answer, claims: verified.claims,
-      evidence: relevant.map((h) => ({ ...h })),
-      sub_questions: subs, confidence, grounded: Boolean(verified.claims.length) && verified.ratio > 0.3,
-      iterations: 1, provider: "ignis-agent", model: deepModel,
-      trace: [], latency_ms: 0, run_id: crypto.randomUUID(),
-    };
+  const allHits: Hit[] = [];
+  for (const sq of subs) {
+    const hits = await retrieveGraded(env, sq, mode === "deep" ? 4 : k);
+    for (const h of hits) h.sub_question = sq;
+    allHits.push(...hits);
+    step("retrieve", {
+      iteration: 0,
+      sub_question: sq,
+      n_hits: hits.length,
+      verdict: (hits as any).verdict ?? heuristicGrade(hits).verdict,
+    });
   }
 
-  // fast — single LLM pass on the raw question
-  const fastModel = model || "gpt-6-astra";
-  emit("mode", { mode, use_llm: true, provider: "ignis-agent", model: fastModel });
-  const hits = await retrieve(env, question, k);
-  emit("retrieve", { iteration: 0, sub_questions: [], hits: hits.length });
-  const synth = await synthesizeWithLLM(env, question, hits, [], fastModel);
-  const hitsByChunk = new Map(hits.map((h) => [h.chunk_id, h]));
+  // Grade the pooled evidence; if it is thin, expand the query and retry once.
+  const seen = new Set<number>();
+  let ranked = allHits.filter((h) => { if (seen.has(h.chunk_id)) return false; seen.add(h.chunk_id); return true; });
+  ranked.sort((a, b) => b.final_score - a.final_score);
+  let relevant = ranked.slice(0, k);
+
+  const pooledGrade = heuristicGrade(relevant);
+  step("grade", { verdict: pooledGrade.verdict, score: Number(pooledGrade.score.toFixed(3)), n: relevant.length });
+
+  if (pooledGrade.verdict !== "sufficient") {
+    const expanded = expandQuery(question, new Set(subs));
+    step("expand", { from: question, to: [expanded] });
+    const more = await retrieveGraded(env, expanded, k);
+    for (const h of more) h.sub_question = expanded;
+    const merged = new Map<number, Hit>();
+    for (const h of [...relevant, ...more]) {
+      const prev = merged.get(h.chunk_id);
+      if (!prev || h.final_score > prev.final_score) merged.set(h.chunk_id, h);
+    }
+    relevant = [...merged.values()].sort((a, b) => b.final_score - a.final_score).slice(0, k);
+  }
+
+  const usedModel = model || "gpt-5.6-sol";
+  const synth = await synthesizeWithLLM(env, question, relevant, subs, usedModel);
+  const hitsByChunk = new Map(relevant.map((h) => [h.chunk_id, h]));
   const verified = verifyClaims(synth.claims, hitsByChunk);
   const confidence = Math.round(Math.min(0.95, 0.55 * synth.confidence + 0.45 * verified.ratio) * 1000) / 1000;
-  emit("synthesize", { provider: "ignis-agent", model: fastModel, claims: verified.claims.length });
+  step("synthesize", { provider: "ignis-agent", model: usedModel, claims: verified.claims.length });
+  step("verify", { verified_ratio: Number(verified.ratio.toFixed(3)), claims: verified.claims.length });
+
+  // Persist the durable findings so later questions can recall them.
+  try {
+    const written = await memoryWrite(env, question, verified.claims, conversationId);
+    if (written) step("memory_write", { n_claims: written });
+  } catch { /* best-effort */ }
+
   return {
-    question, answer: synth.answer, claims: verified.claims,
-    evidence: hits.map((h) => ({ ...h })),
-    sub_questions: [], confidence, grounded: Boolean(verified.claims.length) && verified.ratio > 0.3,
-    iterations: 1, provider: "ignis-agent", model: fastModel,
-    trace: [], latency_ms: 0, run_id: crypto.randomUUID(),
+    run_id: runId,
+    question,
+    answer: synth.answer,
+    claims: verified.claims,
+    evidence: relevant.map((h) => ({ ...h })),
+    sub_questions: subs,
+    confidence,
+    grounded: Boolean(verified.claims.length) && verified.ratio > 0.3,
+    iterations: 1,
+    provider: "ignis-agent",
+    model: usedModel,
+    trace,
+    latency_ms: Date.now() - started,
   };
+}
+
+/** Vector recall across the session store and the durable long-term store. */
+async function memoryRecall(env: Env, query: string, topK: number,
+                            conversationId?: string): Promise<{ kind: string; content: string; score: number }[]> {
+  const sql = db(env);
+  const vec = toPgVector(await embedOne(env, query));
+  const longRows: any[] = await sql`SELECT * FROM ignis.recall_long_term(${vec}::text, ${topK}, 0.45)`;
+  let sessionRows: any[] = [];
+  if (conversationId) {
+    sessionRows = await sql`SELECT * FROM ignis.recall_short_term(${vec}::text, ${conversationId}::uuid, ${topK}, 0.45)`;
+  }
+  return [...sessionRows, ...longRows].map((h) => ({
+    kind: h.kind, content: h.content, score: Number(h.score),
+  }));
+}
+
+/**
+ * Persist verified claims as durable findings. Only claims that are both
+ * verified and specific enough are kept, so the store does not fill with noise.
+ */
+async function memoryWrite(env: Env, question: string, claims: any[],
+                           conversationId?: string): Promise<number> {
+  const keep = (claims ?? [])
+    .filter((c) => c?.verified !== false && typeof c?.claim === "string" && c.claim.length >= 40)
+    .slice(0, 5);
+  if (!keep.length) return 0;
+  const sql = db(env);
+  let n = 0;
+  for (const c of keep) {
+    const content = c.claim.slice(0, 2000);
+    const vec = toPgVector(await embedOne(env, content));
+    const importance = Math.max(0.5, Math.min(0.95, Number(c.support_score ?? 0.7)));
+    if (conversationId) {
+      await sql`INSERT INTO ignis.short_term_memory (conversation_id, kind, content, embedding, importance)
+                VALUES (${conversationId}::uuid, 'finding', ${content}, ${vec}::vector, ${importance})`;
+    }
+    await sql`INSERT INTO ignis.long_term_memory (kind, content, embedding, importance, source)
+              VALUES ('finding', ${content}, ${vec}::vector, ${importance}, ${question.slice(0, 300)})`;
+    n++;
+  }
+  return n;
 }
 
 const REPORT_QUESTIONS = [
@@ -528,7 +660,8 @@ const SUMMARY_SYSTEM =
 
 /** Assemble a cited research report from the corpus (mirrors pipeline/report.py). */
 async function buildReport(env: Env, topic: string, questions: string[] | undefined,
-                           k: number, model: string | undefined, maxQuestions: number | undefined) {
+                           k: number, model: string | undefined, maxQuestions: number | undefined,
+                           onProgress?: (event: string, data: any) => void) {
   const t0 = Date.now();
   const sql = db(env);
   let qs = [...(questions?.length ? questions : REPORT_QUESTIONS)];
@@ -538,22 +671,35 @@ async function buildReport(env: Env, topic: string, questions: string[] | undefi
   const statsRows: any[] = await sql`SELECT * FROM ignis.document_stats`;
   const stats = statsRows[0] ?? {};
 
-  // Questions are independent, so research them concurrently — a sequential run
-  // over six questions would exceed the request budget.
+  // Each question is researched as a self-contained agent run. They are
+  // independent, so run them concurrently; progress is reported as they settle
+  // so a streaming caller sees the report grow instead of waiting for all of it.
+  let completed = 0;
   const settled = await Promise.all(qs.map(async (q) => {
     try {
       const res = await runAgent(env, q, "fast", model, k, () => {});
+      completed++;
+      onProgress?.("report_progress", {
+        completed, total: qs.length, question: q,
+        confidence: res.confidence, grounded: res.grounded,
+      });
       return {
         question: q, answer: res.answer, confidence: res.confidence, grounded: res.grounded,
         citations: res.claims, evidence_count: res.evidence.length,
         provider: res.provider, model: res.model, latency_ms: res.latency_ms,
       };
     } catch (err: any) {
+      completed++;
       console.error(`report question failed (${q}): ${String(err?.message ?? err).slice(0, 160)}`);
+      onProgress?.("report_progress", {
+        completed, total: qs.length, question: q, failed: true,
+      });
       return null;
     }
   }));
   const findings: any[] = settled.filter(Boolean);
+
+  onProgress?.("report_summary", { questions: findings.length });
 
   let narrative: { summary: string; limitations: string[]; recommendations: string[] };
   const llmModel = model || "gpt-5.6-sol";
@@ -885,6 +1031,33 @@ export default {
       try { rbody = await request.json(); } catch { /* ignore */ }
       const topic = String(rbody.topic ?? "").trim();
       if (!topic) return json({ error: "missing 'topic'" }, 400);
+
+      // Streaming form: emit one event per finished question, then the report.
+      // A six-question report cannot fit in a single response budget, so the
+      // dashboard reads progress and renders the report as it completes.
+      if (rbody.stream) {
+        const enc = new TextEncoder();
+        const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+        const writer = writable.getWriter();
+        const emit = (event: string, data: any) => {
+          writer.write(enc.encode(`data: ${JSON.stringify({ event, data })}\n\n`)).catch(() => {});
+        };
+        buildReport(env, topic, rbody.questions, Number(rbody.k ?? 8), rbody.model,
+                    rbody.max_questions, emit)
+          .then((report) => emit("done", { report, markdown: renderMarkdown(report) }))
+          .catch((err: any) => emit("error", { error: String(err?.message ?? err) }))
+          .finally(async () => {
+            try {
+              await writer.write(enc.encode(`data: ${JSON.stringify({ event: "close" })}\n\n`));
+              await writer.close();
+            } catch { /* client gone */ }
+          });
+        return new Response(readable, {
+          status: 200,
+          headers: { ...cors, "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" },
+        });
+      }
+
       try {
         const report = await buildReport(
           env, topic, rbody.questions, Number(rbody.k ?? 8),
@@ -953,11 +1126,13 @@ export default {
     const mode: "fast" | "deep" = body.mode === "deep" ? "deep" : "fast";
     const model = typeof body.model === "string" && body.model ? body.model : undefined;
     const k = Number(body.k) > 0 ? Number(body.k) : 8;
+    const conversationId = typeof body.conversation_id === "string" && body.conversation_id
+      ? body.conversation_id : undefined;
 
     // Non-streaming JSON form for programmatic callers.
     if (url.pathname === "/ask-sync") {
       try {
-        const result = await runAgent(env, question, mode, model, k, () => {});
+        const result = await runAgent(env, question, mode, model, k, () => {}, conversationId);
         return json(result);
       } catch (err: any) {
         return json({ error: String(err?.message ?? err) }, 500);
@@ -972,7 +1147,7 @@ export default {
     const emit = (node: string, data: any) => {
       writer.write(enc.encode(`data: ${JSON.stringify({ event: node, data })}\n\n`)).catch(() => {});
     };
-    runAgent(env, question, mode, model, k, emit)
+    runAgent(env, question, mode, model, k, emit, conversationId)
       .then((result) => emit("done", result))
       .catch((err: any) => emit("error", { error: String(err?.message ?? err) }))
       .finally(async () => {

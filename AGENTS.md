@@ -199,3 +199,48 @@ LLM tokens, so the plan is to run the agent stages on the server but stream
 tokens to the client. As of the hand-off, `/v1/chat/completions` streaming is
 verified at the gateway; wiring streaming into `/api/ask` and the frontend is
 the next step (see HANDOFF.md).
+
+## Agent synthesis: ask for markdown, derive citations locally
+
+`workers/ignis-agent` is the live agent (the Python `pipeline/` is the offline
+harvester). Its `/ask` and `/ask-sync` endpoints run
+`plan → retrieve → grade → expand → synthesize → verify`.
+
+The default model, `gpt-5.6-sol`, is a **reasoning model**. It spends its
+`max_tokens` budget on hidden reasoning before emitting any text, so:
+
+- **Do not ask it for JSON.** Structured-output prompts make it hit
+  `finish_reason=incomplete` with an empty `message.content`. This was the
+  original cause of the extractive fallback firing on most questions.
+- **Ask for plain markdown** (3-5 sentences) and cap `max_tokens` around 900.
+  `reasoning_effort` must be sent; `low` is both faster and more reliable here
+  (`medium` truncates more often).
+- **Derive claims from `[n]` markers, not from model-authored quote fields.**
+  `claimsFromCitations()` maps each marker to the passage it points at and
+  quotes that passage, so every claim is grounded by construction and
+  `verifyClaims()` cannot fail on a hallucinated quote.
+- **Retry once with a larger budget** when the call returns empty; the retry
+  loop in `synthesizeWithLLM()` tries 900 then 2000 tokens before falling back
+  to `synthesizeExtractive()`.
+
+Measured after this change: 5/5 non-extractive answers, 7-12s, confidence
+0.88-0.95. Before it: extractive fallback on most runs, 14-38s.
+
+## Deploying the dashboard
+
+- Agent Worker: `cd workers/ignis-agent && npx wrangler deploy`.
+- Gateway Worker: `cd workers/ignis-gateway && npx wrangler deploy`.
+- Pages: the project is named **`ignis`** (not `ignis-1j3` — that is only the
+  `*.pages.dev` subdomain). `wrangler pages deploy` needs `CI=true` and the
+  project name, or it fails with "cannot be run in a non-interactive context"
+  while trying to prompt for a project:
+  `cd web && CI=true npx wrangler pages deploy dist --project-name=ignis --branch=main`.
+- The frontend proxies `/api/*` to the agent Worker via the `IGNIS_LIVE_URL`
+  var in `web/wrangler.toml`.
+
+## Python tests
+
+`npm test` runs `pytest tests/`. It needs `psycopg[binary]`, `requests` and
+`fastembed` installed, plus a reachable `DATABASE_URL`; without them the
+collection errors are import failures, not real test failures. With them:
+111 passed.

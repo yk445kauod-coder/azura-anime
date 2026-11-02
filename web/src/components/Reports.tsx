@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { postSse } from "@/lib/sse";
+import Markdown from "@/components/Markdown";
 
 type Citation = {
   claim?: string; chunk_id?: number; document_id?: number; source_id?: string;
@@ -37,32 +39,6 @@ const TOPICS = [
   "large-scale spacecraft fire experiments (SAFFIRE)",
 ];
 
-/** Minimal markdown renderer: headings, bullets, bold, and inline citations. */
-function Rich({ text }: { text: string }) {
-  const inline = (s: string) =>
-    s
-      .split(/(\*\*[^*]+\*\*|\[\d+\])/g)
-      .filter(Boolean)
-      .map((part, i) => {
-        if (part.startsWith("**") && part.endsWith("**"))
-          return <strong key={i}>{part.slice(2, -2)}</strong>;
-        if (/^\[\d+\]$/.test(part)) return <span key={i} className="cite">{part}</span>;
-        return <span key={i}>{part}</span>;
-      });
-
-  return (
-    <>
-      {text.split("\n").map((line, i) => {
-        const t = line.trim();
-        if (!t) return <div key={i} style={{ height: 8 }} />;
-        if (t.startsWith("### ")) return <h4 key={i}>{inline(t.slice(4))}</h4>;
-        if (t.startsWith("## ")) return <h3 key={i}>{inline(t.slice(3))}</h3>;
-        if (t.startsWith("- ")) return <li key={i}>{inline(t.slice(2))}</li>;
-        return <p key={i}>{inline(t)}</p>;
-      })}
-    </>
-  );
-}
 
 export default function Reports() {
   const [topic, setTopic] = useState(TOPICS[0]);
@@ -70,22 +46,28 @@ export default function Reports() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [progress, setProgress] = useState<{ question: string; ok: boolean }[]>([]);
 
   async function generate() {
     setBusy(true);
     setError(null);
     setReport(null);
+    setProgress([]);
     const t0 = Date.now();
     const tick = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 500);
     try {
-      const r = await fetch("/api/report", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ topic, max_questions: 4 }),
+      // Streamed: the worker emits one event per finished question, so the
+      // report is assembled without holding a single long request open.
+      await postSse("/api/report", { topic, stream: true }, (ev) => {
+        const d = ev.data ?? {};
+        if (ev.event === "report_progress") {
+          setProgress((p) => [...p, { question: d.question, ok: !d.failed }]);
+        } else if (ev.event === "done") {
+          setReport(d.report);
+        } else if (ev.event === "error") {
+          setError(d.error || "report failed");
+        }
       });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setReport(d.report);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -164,10 +146,20 @@ export default function Reports() {
           ))}
         </div>
         {busy && (
-          <p className="muted" style={{ marginTop: 12 }}>
-            Running the agentic RAG pipeline across the corpus sub-questions, then
-            assembling the report. This takes a minute or two.
-          </p>
+          <div style={{ marginTop: 12 }}>
+            <p className="muted" style={{ margin: 0 }}>
+              Researching each question against the corpus, then assembling the report.
+            </p>
+            <ol className="timeline">
+              {progress.map((p, i) => (
+                <li key={i}>
+                  <span className={`tag ${p.ok ? "" : "sev-high"}`}>{p.ok ? "done" : "failed"}</span>
+                  <span>{p.question}</span>
+                </li>
+              ))}
+              {progress.length === 0 && <li className="muted">starting…</li>}
+            </ol>
+          </div>
         )}
         {error && <div className="err" style={{ marginTop: 12 }}>{error}</div>}
       </div>
@@ -194,7 +186,7 @@ export default function Reports() {
           <div className="card">
             <h3>Executive Summary <small>generated from the findings below</small></h3>
             <div className="answer">
-              <Rich text={report.summary} />
+              <Markdown text={report.summary} />
             </div>
           </div>
 
@@ -210,7 +202,7 @@ export default function Reports() {
                   </span>
                 </div>
                 <div className="answer" style={{ marginTop: 8 }}>
-                  <Rich text={f.answer} />
+                  <Markdown text={f.answer} />
                 </div>
               </div>
             ))}
