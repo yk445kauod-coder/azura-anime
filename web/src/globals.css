@@ -145,8 +145,9 @@ th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: upp
 tbody tr:hover { background: rgba(255, 255, 255, 0.022); }
 
 .answer {
-  white-space: pre-wrap; line-height: 1.68; font-size: 13.8px;
-  background: #0a0f1a; border: 1px solid var(--line); border-radius: 12px; padding: 16px;
+  line-height: 1.72; font-size: 14px;
+  background: #0a0f1a; border: 1px solid var(--line); border-radius: 12px;
+  padding: 18px 20px;
 }
 .quote {
   border-left: 3px solid var(--flame); padding: 9px 13px; margin: 9px 0;
@@ -178,7 +179,11 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.022); }
   color: var(--text); padding: 9px 14px; font-size: 13.5px; font-family: inherit;
 }
 .input:focus { outline: none; border-color: var(--flame); }
-.cite { color: var(--cyan); font-size: 11px; vertical-align: super; margin: 0 1px; }
+.cite {
+  color: var(--cyan); font-size: 10.5px; font-weight: 600;
+  vertical-align: super; line-height: 0; margin: 0 1px 0 0;
+  font-variant-numeric: tabular-nums;
+}
 .card h4 { font-size: 13px; margin: 12px 0 6px; color: #e6ecf8; }
 .card li { margin: 3px 0 3px 18px; font-size: 13.4px; line-height: 1.6; }
 .card p { margin: 7px 0; font-size: 13.6px; line-height: 1.68; }
@@ -228,19 +233,34 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.022); }
 .sublist li { margin: 3px 0; }
 
 /* ---------- markdown ---------- */
-.md { line-height: 1.7; font-size: 13.9px; }
-.md p { margin: 0 0 2px; }
-.md h3 { margin: 14px 0 6px; font-size: 14px; }
-.md h4 { margin: 12px 0 5px; font-size: 13px; color: #e6ecf8; }
-.md li { margin: 3px 0 3px 18px; }
-.md strong { color: #fff; }
+.md { line-height: 1.72; font-size: 14px; color: #d3dbeb; }
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md p { margin: 0 0 12px; }
+.md h3 {
+  margin: 22px 0 10px; font-size: 14.5px; color: #fff; font-weight: 650;
+  padding-bottom: 7px; border-bottom: 1px solid rgba(36, 48, 74, 0.85);
+}
+.md h4 { margin: 18px 0 8px; font-size: 13.5px; color: #eaf0fb; font-weight: 650; }
+.md strong { color: #fff; font-weight: 650; }
+.md em { color: #dfe6f4; }
+.md a { color: var(--cyan); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+
+/* Lists need their own padding: markers sit outside the content box, so a
+   list without padding-left clips its bullets against the card edge. */
+.md ul, .md ol { margin: 0 0 13px; padding-left: 22px; }
+.md li { margin: 5px 0; padding-left: 3px; }
+.md li::marker { color: var(--flame); }
+.md ul ul, .md ol ol, .md ul ol, .md ol ul { margin: 5px 0 0; }
+.md blockquote { margin: 12px 0; }
+.md .tablewrap { overflow-x: auto; margin: 0 0 14px; }
 .code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.6px;
   background: rgba(56, 214, 255, 0.09); border: 1px solid rgba(56, 214, 255, 0.2);
   border-radius: 5px; padding: 1px 5px; color: var(--cyan);
 }
-.cite { color: var(--cyan); font-size: 10.5px; margin: 0 1px; }
-
 /* ---------- hits ---------- */
 .hittitle { font-weight: 600; font-size: 13px; margin-bottom: 5px; display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap; }
 .scroll.short { max-height: 240px; }

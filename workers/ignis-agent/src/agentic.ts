@@ -54,7 +54,7 @@ export type LoopResult = {
   steps: LoopStep[];
   hits: LoopHit[];
   chartRequest: { dataset: string; type: "bar" | "line" | "scatter" } | null;
-  stopReason: "final_answer" | "budget" | "deadline" | "parse_error" | "model_error";
+  stopReason: "final_answer" | "budget" | "deadline" | "parse_error" | "model_error" | "forced_synthesis";
   promptTokens: number;
   completionTokens: number;
   iterations: number;
@@ -100,8 +100,26 @@ Rules:
 2. Prefer 1-3 searches: issue a focused query, read the evidence, then either search a genuinely different angle or answer. Do not repeat a query you already ran.
 3. Use compare_experiments when the question names specific campaigns or asks for a comparison.
 4. Use build_chart only when the user asks for a figure, chart, or visual; it also records the figure for the answer.
-5. In the final answer give 3-6 short markdown sentences with concrete numbers (spread rates, oxygen limits, temperatures, pressures) and experiment names where the evidence has them. Say the evidence is insufficient rather than inventing anything.
+5. The final answer is rendered as markdown, so structure it instead of writing one block of prose. Open with one or two sentences that answer the question directly. Then group the findings under short "## " headings (for example "## Microgravity vs. Earth", "## Quantified results", "## Fire-safety implications"). Under each heading use "- " bullets, one finding per bullet, each one or two sentences. Bold the key number or conclusion in each bullet. Use a markdown table when the evidence compares the same quantity across experiments or gravity levels. Carry concrete numbers (spread rates, oxygen limits, temperatures, pressures) and experiment names where the evidence has them. Say the evidence is insufficient rather than inventing anything.
 6. Confidence is your own 0-1 estimate that the answer is fully supported by the cited evidence.`;
+
+/**
+ * Used when the loop runs out of iterations before the model answers. The raw
+ * evidence dump is not an answer, so one final call turns the gathered passages
+ * into the structured response the user asked for.
+ */
+const FINAL_ANSWER_INSTRUCTION = `You are IGNIS, a scientific research analyst for NASA microgravity combustion and spacecraft fire safety.
+
+Write the final answer to the research question using ONLY the numbered evidence blocks provided. Cite each factual sentence with bracketed evidence numbers like [3] that refer to those blocks.
+
+Structure the answer as markdown so it is scannable:
+- Open with one or two sentences that answer the question directly.
+- Group the findings under short "## " headings (for example "## Microgravity vs. Earth", "## Quantified results", "## Fire-safety implications").
+- Under each heading use "- " bullets, one finding per bullet, each one or two sentences.
+- Bold the key number or conclusion in each bullet.
+- Use a markdown table when the evidence compares the same quantity across experiments or gravity levels.
+
+Carry concrete numbers (spread rates, oxygen limits, temperatures, pressures) and experiment names wherever the evidence has them. If the evidence does not answer the question, say so plainly instead of inventing anything. Reply with markdown only: no JSON, no preamble, no code fences.`;
 
 /** Numbered transcript of everything retrieved so far, for citation stability. */
 function evidenceBlock(hits: LoopHit[]): string {
@@ -109,6 +127,23 @@ function evidenceBlock(hits: LoopHit[]): string {
   return hits.map((h, i) =>
     `[${i + 1}] ${h.title} (NTRS ${h.source_id}; ${h.section_path ?? h.kind})\n${h.content.slice(0, 900).trim()}`,
   ).join("\n\n");
+}
+
+/** Remove a wrapping code fence, which models add despite being told not to. */
+function stripFences(raw: string): string {
+  return raw.trim().replace(/^```(?:markdown|md|json)?\s*/, "").replace(/\s*```$/, "").trim();
+}
+
+/**
+ * True when text reads as a written answer rather than scratch work or a
+ * malformed tool call. Requires several lines and a citation, so a stray
+ * sentence or a broken JSON fragment is not mistaken for a final answer.
+ */
+function looksLikeAnswer(text: string): boolean {
+  if (text.length < 200) return false;
+  if (/^\s*[\[{]/.test(text)) return false;
+  const lines = text.split("\n").filter((l) => l.trim()).length;
+  return lines >= 3 && /\[\d+\]/.test(text);
 }
 
 function extractJson(raw: string): any | null {
@@ -158,6 +193,7 @@ export async function runAgentLoop(
   let promptTokens = 0;
   let completionTokens = 0;
   let lastError: string | undefined;
+  let parseErrors = 0;
   let stopReason: LoopResult["stopReason"] = "budget";
 
   const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
@@ -187,9 +223,26 @@ export async function runAgentLoop(
       messages.push({ role: "assistant", content: raw });
       const obj = extractJson(raw);
       if (!obj || typeof obj !== "object") {
-        stopReason = "parse_error";
+        // Models sometimes ignore the JSON envelope and write the answer
+        // directly. That prose is still a usable answer, so keep it rather than
+        // discarding the whole run over a formatting slip.
+        const prose = stripFences(raw);
+        if (looksLikeAnswer(prose)) {
+          stopReason = "final_answer";
+          return {
+            answer: prose, steps, hits: pool, chartRequest, stopReason,
+            promptTokens, completionTokens, iterations: iteration + 1,
+          };
+        }
+        // Otherwise it is scratch work: ask again instead of aborting the run.
+        parseErrors++;
         lastError = "model did not return a JSON object";
-        break;
+        if (parseErrors >= 2) { stopReason = "parse_error"; break; }
+        messages.push({
+          role: "user",
+          content: "Reply with exactly one JSON object and nothing else — no prose, no code fences.",
+        });
+        continue;
       }
       parsed = obj;
     } catch (err: any) {
@@ -226,22 +279,55 @@ export async function runAgentLoop(
     steps.push(step);
     onStep?.(step);
 
+    const lastTurn = iteration + 1 >= maxIterations;
     messages.push({
       role: "user",
       content:
         `Observation from ${tool}:\n${outcome.observation}\n\n` +
         `Evidence gathered so far (cite these numbers in your final answer):\n${evidenceBlock(pool)}\n\n` +
-        "Reply with one JSON object: another tool call, or final_answer.",
+        (lastTurn
+          ? "This is your last turn. Reply with one JSON object using final_answer and write the full structured markdown answer now."
+          : "Reply with one JSON object: another tool call, or final_answer."),
     });
   }
 
-  // The loop ran out of iterations or time. Return what the evidence supports
-  // rather than nothing, and say plainly that no synthesis was reached.
-  const fallback = pool.length
-    ? `Evidence retrieved for: ${question}\n\n${evidenceBlock(pool.slice(0, 5))}`
-    : `No evidence was retrieved for: ${question}`;
+  // The loop ran out of iterations or time without a final answer. A raw
+  // evidence dump is not an answer, so spend one more call synthesizing the
+  // passages already gathered into the structured response.
+  if (pool.length) {
+    const remaining = Math.max(20000, Math.min(90000, deadlineMs - (Date.now() - started)));
+    try {
+      const raw = await deps.chat(
+        [
+          { role: "system", content: FINAL_ANSWER_INSTRUCTION },
+          {
+            role: "user",
+            content: `Research question: ${question}\n\nEvidence:\n${evidenceBlock(pool)}\n\nWrite the final answer now.`,
+          },
+        ],
+        { maxTokens: 4000, effort: "medium", timeoutMs: remaining },
+      );
+      // The forced pass is asked for prose, but tolerate a JSON envelope.
+      const obj = extractJson(raw);
+      const answer = String(
+        obj && typeof obj.answer === "string" && obj.answer.trim() ? obj.answer : raw,
+      ).replace(/^```(?:markdown|md)?\s*/, "").replace(/\s*```$/, "").trim();
+      if (answer) {
+        return {
+          answer, steps, hits: pool, chartRequest, stopReason: "forced_synthesis",
+          promptTokens, completionTokens, iterations: steps.length,
+        };
+      }
+    } catch (err: any) {
+      lastError = String(err?.message ?? err).slice(0, 300);
+    }
+  }
+
   return {
-    answer: fallback, steps, hits: pool, chartRequest, stopReason,
+    answer: pool.length
+      ? `No synthesis was reached for: ${question}`
+      : `No evidence was retrieved for: ${question}`,
+    steps, hits: pool, chartRequest, stopReason,
     promptTokens, completionTokens, iterations: steps.length, lastError,
   };
 }

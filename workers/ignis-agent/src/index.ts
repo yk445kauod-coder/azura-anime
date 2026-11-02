@@ -336,8 +336,14 @@ const SYNTH_SYSTEM =
   "limits, temperatures, experiment names) and cite them. Only say the evidence is " +
   "insufficient if the blocks genuinely contain nothing relevant to the question. " +
   "Never invent values, experiment names, or citations. " +
-  "Reply with plain markdown only: 3-5 short sentences, no preamble, no headings, " +
-  "no JSON, no code fences.";
+  "Structure the answer as markdown so it is scannable rather than one block of prose: " +
+  "start with a one- or two-sentence direct answer, then use short ## headings to group " +
+  "the findings (for example ## Microgravity vs. Earth, ## Quantified results, " +
+  "## Fire-safety implications). Under each heading use bullet points, one finding per " +
+  "bullet, keeping each bullet to one or two sentences. Use a markdown table when " +
+  "comparing the same quantity across experiments or gravity levels. Bold the key " +
+  "quantity or conclusion in each bullet. " +
+  "Reply with markdown only: no preamble, no JSON, no code fences.";
 
 const EXPANSIONS: Record<string, string[]> = {
   "flame spread": ["flame spread rate", "counterflow flame spread", "opposed flow spread"],
@@ -466,7 +472,9 @@ async function plan(env: Env, question: string, model: string,
  * every question, so they get a larger opening budget.
  */
 function synthBudgets(model: string): number[] {
-  return /astra|6\.1/.test(model) ? [3000, 6000] : [900, 2500];
+  // Structured markdown with headings, bullets, and tables runs longer than the
+  // flat prose these budgets were originally sized for.
+  return /astra|6\.1/.test(model) ? [4000, 8000] : [1800, 3500];
 }
 
 /** Total wall-clock allowed for all synthesis attempts on one question. */
