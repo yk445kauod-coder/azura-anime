@@ -57,15 +57,15 @@ NASA NTRS ──► harvest ──► clean ──► chunk ──► embed ─�
 | Layer | Technology |
 |---|---|
 | UI | React 19 + TypeScript, built with Vite (`web/`) |
-| Hosting | Cloudflare Pages (`ignis-1j3.pages.dev`) |
+| Hosting | Cloudflare Pages (`ignis-project.pages.dev`) |
 | API | Cloudflare Worker `ignis-agent` (serverless, Neon over HTTP) + Pages Function `/api/*` proxy |
-| Agent / RAG | Python (`pipeline/lib/agent.py`, `retrieve.py`, `synth.py`) |
+| Agent / RAG | `workers/ignis-agent/src/agentic.ts` (live); Python reference in `pipeline/lib/` |
 | Database | Neon Postgres 18 + **pgvector** (HNSW) + `pg_trgm` |
 | Embeddings | `BAAI/bge-small-en-v1.5` (384-d, local ONNX via `fastembed`) |
 | Object storage | Neon S3-compatible storage (PDF + fulltext mirror) |
 | LLM | Pluggable (OpenAI-compatible / OpenRouter / Ollama), with a deterministic extractive fallback |
 
-### Schema (`ignis`, 22 tables)
+### Schema (`ignis`, 25 tables + 3 views)
 
 ```
 raw_record ── artifact                    # harvest provenance
@@ -77,6 +77,7 @@ agent_run ── agent_step                   # agent observability
    ├─► retrieval_hit                      # what was retrieved, per sub-question
    └─► citation                           # what was actually cited + verification
 insight · pipeline_run · llm_cache · dedupe_map · conversation · message
+ui_translation · dataset / dataset_row (views) · memory_signal
 ```
 
 ### Retrieval
@@ -126,10 +127,10 @@ npm run worker:deploy               # deploy the ignis-agent worker
 npm run web:deploy                  # build + publish to Cloudflare Pages
 ```
 
-The Pages project (`ignis`) serves the SPA and a Pages Function forwards `/api/*` to the
+The Pages project (`ignis-project`) serves the SPA and a Pages Function forwards `/api/*` to the
 worker, so the browser stays on one origin and SSE streaming passes through untouched.
 
-**Live:** https://ignis-1j3.pages.dev
+**Live:** https://ignis-project.pages.dev
 
 Already collected the corpus? Rebuild the derived layers only:
 
@@ -156,6 +157,9 @@ and demos are cheap and reproducible.
 
 ## API
 
+The full reference — every field, every SSE event, error shapes and the
+degraded-answer contract — is in **[docs/API.md](docs/API.md)**. Summary:
+
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/api/health` | GET | DB connectivity + corpus stats |
@@ -165,14 +169,37 @@ and demos are cheap and reproducible.
 | `/api/experiments` | GET | campaigns and facilities |
 | `/api/experiments/:code` | GET | one campaign + linked documents + findings |
 | `/api/search` | GET | hybrid retrieval only (`q`, `k`) |
-| `/api/ask` | POST | **agentic RAG** — `{ question, k?, use_llm? }` |
+| `/api/ask` | POST | **agentic RAG** — `{ question, k?, mode?, model?, conversation_id?, stream? }` |
+| `/api/ask-sync` | POST | same, without streaming |
 | `/api/compare` | POST | **comparative analysis** — `{ experiments: string[], topic? }` |
+| `/api/report` | POST | multi-question report (SSE progress) |
 | `/api/insights` | GET | fire-safety insights + metric distributions + coverage |
+| `/api/memory` | GET | recall (`conversation_id` must be a UUID) |
+| `/api/locales` | GET | available UI locales and their direction |
+| `/api/export` | POST | render markdown as PDF or DOCX |
 
 ```bash
-curl -s https://ignis-1j3.pages.dev/api/ask -H 'content-type: application/json' \
+curl -s https://ignis-project.pages.dev/api/ask -H 'content-type: application/json' \
   -d '{"question":"How does flame spread over solid fuels differ in microgravity?"}' | jq
 ```
+
+### Answers are markdown with positional citations
+
+`answer` is structured markdown — headings, bullets, tables — and `[n]` markers resolve to
+the nth entry of the `evidence` array. Render `evidence` in the order received or the
+numbers point at the wrong passages. Check `stop_reason`: `final_answer` and
+`forced_synthesis` are complete, while `budget`, `deadline`, `parse_error` and
+`model_error` mean the answer is partial and should be labelled as such.
+
+---
+
+## Documentation
+
+| Guide | Covers |
+|---|---|
+| **[docs/API.md](docs/API.md)** | Every endpoint, response field, SSE event, error and limitation |
+| **[docs/SCHEMA.md](docs/SCHEMA.md)** | All 25 tables and 3 views, relationships, and what the data can and cannot support |
+| **[docs/FRONTEND.md](docs/FRONTEND.md)** | Design tokens, UX rules, component inventory, i18n, accessibility, common mistakes |
 
 ---
 
@@ -187,6 +214,38 @@ curl -s https://ignis-1j3.pages.dev/api/ask -H 'content-type: application/json' 
 * Values belong to their source experiment's conditions. IGNIS warns against extrapolating
   across facilities with different gravity levels, pressures and O₂ fractions, and it reports
   per-campaign coverage so gaps are visible.
+
+---
+
+## Configuration
+
+Copy `.env.example` to `.env`. The pipeline needs a database and storage; the dashboard
+needs neither, because it talks to the deployed worker.
+
+| Variable | Required | Used by | Notes |
+|---|---|---|---|
+| `DATABASE_URL` | yes | pipeline, migrations | Direct (unpooled) connection. Use for migrations and long jobs |
+| `DATABASE_URL_POOLED` | yes | app queries | Pooled. Use for short-lived/serverless queries |
+| `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET` | yes | `pipeline/collect.py` | S3-compatible object storage for PDFs and fulltext |
+| `IGNIS_TARGET_MB` | no | collect | Harvest size target, default 300 |
+| `IGNIS_EMBED_MODEL`, `IGNIS_EMBED_DIM` | no | index | Must match the worker's `DB_EMBED_MODEL`. Changing either invalidates the index |
+| `IGNIS_LLM_PROVIDERS` | no | pipeline | Provider order; comma separated |
+
+The worker's own secrets live in Cloudflare, not in `.env`:
+
+```bash
+cd workers/ignis-agent
+npx wrangler secret put NEON_DATABASE_URL     # full postgres:// connection string
+npx wrangler secret put IGNIS_PROXY_TOKEN     # caller token accepted by ignis-gateway
+npx wrangler secret put AGENTROUTER_API_KEY   # upstream key passed to the gateway
+```
+
+`IGNIS_DEEP_MODEL` and `IGNIS_FAST_MODEL` are plain vars in
+`workers/ignis-agent/wrangler.toml`, so you can A/B a different reasoning core without
+touching code.
+
+> **Never commit `.env`.** It holds a live database password and storage keys. `.env` is
+> gitignored; `.env.example` is the file that belongs in version control.
 
 ---
 
