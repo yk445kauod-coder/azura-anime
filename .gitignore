@@ -30,3 +30,6 @@ npm-debug.log*
 .vercel
 *.tsbuildinfo
 next-env.d.ts
+
+# Worker deploy scratch (contains secret bindings)
+ignis.env

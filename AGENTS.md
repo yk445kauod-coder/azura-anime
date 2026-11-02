@@ -144,3 +144,41 @@ does this with an autouse fixture over `PROVIDER_ENV_VARS`.
 - The Cloudflare token in this workspace is read-only for Workers *scripts*
   (`PUT /accounts/<id>/workers/scripts/<name>` returns "No access to the
   specified resource"), so a proxy Worker cannot be deployed with it.
+
+## LLM gateway Worker (workers/ignis-gateway)
+
+`workers/ignis-gateway/worker.js` is a Cloudflare Worker that proxies the IGNIS
+pipeline's LLM calls to AgentRouter (`agentrouter.org`). It exists because the
+local network is blocked by an Aliyun WAF on `https://agentrouter.org`; Cloudflare's
+edge IP plus the `claude-cli/2.0.0 (external, cli)` User-Agent is allowlisted.
+
+Behavior:
+- `/health` — liveness + `upstream_key_configured` (uses `env.AGENTROUTER_API_KEY`).
+- Callers authenticate with `IGNIS_PROXY_TOKEN` (Bearer or `x-ignis-token`).
+- `POST /v1/chat/completions` (with `messages`) is **translated**:
+  chat-completions body -> Responses API body (`/v1/responses` upstream), then the
+  upstream Responses SSE is rewritten back into chat-completions `chunk` frames.
+  Both streaming and non-streaming work.
+- Streaming returns `text/event-stream` with `x-ignis-llm-gateway: <model>`.
+- Reasoning models reject sampling params: on HTTP 400 with `Unsupported
+  parameter: '<name>'`, the param is stripped and the request retried (up to 3).
+- Other paths (e.g. raw `/v1/responses`, `/v1/models`) pass through verbatim.
+
+Key as a secret binding named `AGENTROUTER_API_KEY` (the deploy script
+`scripts/deploy-worker.sh` does this from `.env`). Do not rename the binding:
+the Worker reads `env.AGENTROUTER_API_KEY`.
+
+Verified (2026-11-02): `npm run pipeline:doctor` passes for
+`agentrouter_proxy/gpt-6.1-sol`, and `curl -N` to
+`/v1/chat/completions?stream=true` yields incremental `choices[].delta.content`
+chunks. The direct `agentrouter/claude-opus-4-6` provider legitimately fails the
+doctor (WAF blocks local non-Cloudflare clients) — it is not the gateway path.
+
+### The streaming fix
+
+The dashboard's `/api/ask` previously timed out because the Python pipeline
+serialized a full multi-stage agent run after 180s. The gateway now streams
+LLM tokens, so the plan is to run the agent stages on the server but stream
+tokens to the client. As of the hand-off, `/v1/chat/completions` streaming is
+verified at the gateway; wiring streaming into `/api/ask` and the frontend is
+the next step (see HANDOFF.md).
