@@ -422,14 +422,14 @@ def test_cloudflare_raises_a_tiny_token_budget_for_reasoning_models(monkeypatch)
     assert seen["max_tokens"] == 4000, "a larger caller budget is respected"
 
 
-def test_cloudflare_is_first_in_the_default_chain(monkeypatch):
+def test_default_chain_prefers_gemini_then_cloudflare(monkeypatch):
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cftok")
     monkeypatch.setenv("GEMINI_API_KEY", "gk")
     monkeypatch.setenv("AGENTROUTER_API_KEY", "ak")
     monkeypatch.delenv("IGNIS_LLM_PROVIDERS", raising=False)
     assert [p.name for p in llm_mod.LLM().providers] == [
-        "cloudflare", "gemini", "agentrouter"]
+        "gemini", "cloudflare", "agentrouter"]
 
 
 # --------------------------------------------------------------------------- #

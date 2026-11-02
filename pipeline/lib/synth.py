@@ -10,7 +10,10 @@ This keeps the "evidence & sources" guarantee true even without an API key.
 """
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 from .retrieve import Hit, _query_terms
 from .text import sentences, words
@@ -198,10 +201,10 @@ def synthesize_with_llm(question: str, hits: list[Hit], llm, sub_questions=None)
     from .text import sha256_text
 
     evidence_blocks = []
-    for i, h in enumerate(hits, 1):
+    for i, h in enumerate(hits[:3], 1):
         evidence_blocks.append(
             f"[{i}] {h.title} (NTRS {h.source_id}; section: {h.section_path or h.kind})\n"
-            f"{h.content[:1800]}"
+            f"{h.content[:350].strip()}"
         )
     evidence = "\n\n".join(evidence_blocks)
 
@@ -211,8 +214,11 @@ def synthesize_with_llm(question: str, hits: list[Hit], llm, sub_questions=None)
         "Cite every factual claim with bracketed evidence numbers like [2]. "
         "If the evidence is insufficient, say so explicitly. "
         "Never invent values, experiment names, or citations. "
-        "Return JSON: {\"answer\": string (markdown), \"claims\": "
-        "[{\"claim\": string, \"evidence\": int, \"quote\": string}], \"confidence\": 0..1}"
+        'Emit STRICT JSON only — no markdown fences, no prose around the object. '
+        'The "answer" value must be one line (no literal newline characters, no outer '
+        'double quotes; if it contains quotes, use single quotes). Format: '
+        '{"answer": string (concise markdown with [n] citations), "claims": '
+        '[{"claim": string, "evidence": int, "quote": string}], "confidence": 0..1}'
     )
     user = f"Question: {question}\n\nEvidence:\n{evidence}"
     if sub_questions:
@@ -221,6 +227,8 @@ def synthesize_with_llm(question: str, hits: list[Hit], llm, sub_questions=None)
     data = llm.complete_json(system, user, max_tokens=1800)
     answer = (data.get("answer") or "").strip()
     if not answer:
+        logger.warning(
+            "synth LLM returned unusable payload (keys=%s): %.200r", list(data), (data or {}).get("answer"))
         return synthesize_extractive(question, hits, sub_questions)
 
     claims = []

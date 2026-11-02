@@ -1,14 +1,16 @@
 {
   "name": "ignis",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "IGNIS — AI-powered research platform for NASA microgravity combustion and spacecraft fire-safety data",
+  "description": "IGNIS \u2014 AI-powered research platform for NASA microgravity combustion and spacecraft fire-safety data",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint",
-    "typecheck": "tsc --noEmit",
+    "web:install": "npm --prefix web install",
+    "web:dev": "npm --prefix web run dev",
+    "web:build": "npm --prefix web run build",
+    "web:preview": "npm --prefix web run preview",
+    "web:typecheck": "npm --prefix web run typecheck",
+    "web:deploy": "npm --prefix web run build && (cd web && npx wrangler pages deploy dist --project-name=ignis --branch=main)",
+    "worker:deploy": "npm --prefix workers/ignis-agent run deploy",
     "db:migrate": "python3 pipeline/migrate.py",
     "pipeline:collect": "python3 pipeline/collect.py",
     "pipeline:clean": "python3 pipeline/clean.py",
@@ -20,20 +22,10 @@
     "pipeline:report": "python3 pipeline/report.py",
     "pipeline:doctor": "python3 pipeline/llm_doctor.py",
     "functions:deploy": "bash scripts/deploy-function.sh",
-    "functions:test": "node scripts/test-function.mjs"
-  },
-  "dependencies": {
-    "next": "15.5.4",
-    "pg": "^8.13.1",
-    "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "functions:test": "node scripts/test-function.mjs",
+    "test": "python3 -m pytest tests -q"
   },
   "devDependencies": {
-    "@neon/config": "^1.10.0",
-    "@types/node": "^20.19.19",
-    "@types/pg": "^8.11.10",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "typescript": "^5"
+    "@neon/config": "^1.10.0"
   }
 }

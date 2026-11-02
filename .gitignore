@@ -1,35 +1,12 @@
 node_modules/
 .next/
-out/
-build/
 dist/
-
-# env / secrets
+.wrangler/
 .env
 .env.local
-.env.*.local
-*.pem
-
-# data corpus (regenerable via `npm run pipeline:all`)
-data/raw/
-data/clean/
-data/manifests/*.jsonl
-data/manifests/*.csv
-!data/manifests/.gitkeep
-
-# python
 __pycache__/
 *.pyc
-.venv/
-venv/
-
-# misc
-.DS_Store
-*.log
-npm-debug.log*
-.vercel
+.pytest_cache/
+logs/
+data/
 *.tsbuildinfo
-next-env.d.ts
-
-# Worker deploy scratch (contains secret bindings)
-ignis.env

@@ -299,6 +299,8 @@ def run_agent(
     k: int = 8,
     max_iterations: int = MAX_ITERATIONS,
     use_llm: bool = True,
+    mode: str | None = None,
+    model: str | None = None,
     on_event: Any | None = None,
 ) -> AgentResult:
     def emit(node: str, **kw) -> None:
@@ -308,7 +310,37 @@ def run_agent(
             except Exception:
                 log.debug("on_event callback failed", exc_info=True)
     t0 = time.time()
-    llm = LLM(enabled=use_llm)
+
+    # mode="fast" | "deep" maps onto the reasoning knobs:
+    #   fast : Gemini flash — single retrieval pass on the raw question (fast)
+    #   deep : gpt-5.6-sol on agentrouter_proxy (overridable via
+    #          IGNIS_DEEP_MODEL, e.g. gpt-6.1-sol) — full LLM plan +
+    #          synthesis on the decomposed sub-questions
+    llm_preference: str | None = None
+    provider_models: dict[str, str] | None = None
+    if mode:
+        if mode == "fast":
+            use_llm, max_iterations = True, 1
+            llm_preference = "gemini"
+        elif mode == "deep":
+            use_llm, max_iterations = True, 1   # breadth via sub-questions, not iterations
+            llm_preference = "agentrouter_proxy"   # via Neon/CF gateway
+            # Stealth SI family: gpt-5.6-sol (SI 1, default), gpt-6.1-sol
+            # (SI MAX), gpt-6-astra (SI ULTRA). Chosen by the UI `model`
+            # param; overridable globally via IGNIS_DEEP_MODEL.
+            deep_model = (model or os.environ.get("IGNIS_DEEP_MODEL") or "gpt-5.6-sol").strip()
+            if deep_model not in ("gpt-5.6-sol", "gpt-6.1-sol", "gpt-6-astra"):
+                deep_model = "gpt-5.6-sol"
+            provider_models = {"agentrouter_proxy": deep_model}
+            # Deep models are slow (gpt-6.1-sol ~20-42s/call); LLM grading per
+            # sub-question would add minutes. Keep grading heuristic.
+            os.environ.pop("IGNIS_LLM_GRADE", None)
+
+    llm = LLM(enabled=use_llm, prefer=llm_preference, provider_models=provider_models)
+
+    if mode:
+        emit("mode", mode=mode, use_llm=bool(use_llm), max_iterations=max_iterations,
+             provider=llm.provider, model=llm.model)
 
     run_id = str(uuid.uuid4())
     trace: list[dict] = []
@@ -346,7 +378,11 @@ def run_agent(
 
     # ---------------- PLAN ----------------
     t = time.time()
-    sub_questions, key_terms = plan(question, llm, memory_context=memory_context)
+    if mode == "fast":
+        # Fast path (Gemini): a single retrieval pass on the raw question.
+        sub_questions, key_terms = [question], []
+    else:
+        sub_questions, key_terms = plan(question, llm, memory_context=memory_context)
     emit("plan", sub_questions=sub_questions, key_terms=key_terms)
     trace.append({"node": "plan", "sub_questions": sub_questions, "key_terms": key_terms})
     _persist_step(run_id, step_no(), "plan",

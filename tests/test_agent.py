@@ -132,7 +132,9 @@ def test_run_agent_claims_link_to_retrieved_chunks():
 def test_run_agent_trace_records_every_node():
     res = run_agent("Why is fire suppression harder in microgravity?", k=5, use_llm=False)
     nodes = [t["node"] for t in res.trace]
-    assert nodes[0] == "plan"
+    # A memory-recall node may precede planning when related memory exists.
+    assert nodes[0] in ("plan", "memory")
+    assert "plan" in nodes
     assert "retrieve" in nodes
     assert "verify" in nodes
 

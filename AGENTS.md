@@ -1,15 +1,20 @@
 # IGNIS — agent notes
 
 AI-powered dashboard over NASA NTRS combustion-in-microgravity literature.
-Next.js frontend + API routes in `src/`, Python pipeline in `pipeline/`, Neon
-Postgres for storage and retrieval.
+React + Vite frontend in `web/`, serverless backend in `workers/ignis-agent/`,
+Python pipeline in `pipeline/`, Neon Postgres for storage and retrieval.
+
+Live: https://ignis-1j3.pages.dev (Cloudflare Pages + Pages Function `/api/*` proxy
+to the `ignis-agent` worker).
 
 ## Commands
 
 ```bash
-npm run start            # serve on PORT (12000 in this workspace)
-npm run build            # next build
-npm run typecheck        # tsc --noEmit
+npm run web:dev          # Vite dev server (proxies /api/* to the worker)
+npm run web:build        # typecheck + production build
+npm run web:deploy       # build + publish to Cloudflare Pages
+npm run worker:deploy    # deploy the ignis-agent worker
+npm run web:typecheck    # tsc --noEmit
 python3 -m pytest tests/ -q          # full suite (~85s, needs DATABASE_URL)
 python3 pipeline/llm_doctor.py       # probe every configured LLM provider
 npm run pipeline:report -- --topic "..."   # generate a research report
@@ -17,6 +22,18 @@ npm run pipeline:report -- --topic "..."   # generate a research report
 
 Tests hit the real Neon database; there is no mocking layer. `tests/conftest.py`
 skips DB-dependent tests when the database is unreachable.
+
+## Deployment topology
+
+| Piece | Where | Notes |
+| --- | --- | --- |
+| Dashboard | Cloudflare Pages, project `ignis` → https://ignis-1j3.pages.dev | `web/dist`, SPA fallback via `web/public/_redirects` |
+| API proxy | Pages Function `web/functions/api/[[path]].ts` | forwards `/api/<x>` to the worker's `/<x>`; streams SSE through |
+| Backend | Worker `ignis-agent` | hybrid retrieval, agent loop, `/report`, `/memory`; Neon over HTTP |
+| LLM gateway | Worker `ignis-gateway` | holds the upstream agentrouter.org key; `IGNIS_PROXY_TOKEN` gates callers |
+
+`/health` on the worker returns the full `document_stats` row, so the dashboard
+header can show live corpus counts.
 
 ## LLM providers
 
@@ -74,7 +91,7 @@ have credentials. No code change is needed once the token is in place.
 egress: the function runs on Neon's network, so it can reach the gateway from
 networks the WAF blocks. Callers authenticate with `IGNIS_PROXY_TOKEN`; the
 handler attaches the real upstream key, so the paid credential never reaches the
-browser or the Next.js process.
+browser or any server process.
 
 Deploy with `npm run functions:deploy`, which runs `neon deploy --env .env`,
 reads back the invocation URL, and writes `IGNIS_AGENTROUTER_PROXY_URL` into

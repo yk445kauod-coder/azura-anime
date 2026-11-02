@@ -39,8 +39,9 @@ function toResponsesBody(chat) {
   }));
 
   const body = { model: chat.model, input: input };
-  const maxOut = chat.max_tokens || chat.max_output_tokens;
-  if (maxOut) body.max_output_tokens = maxOut;
+  // No cap by default: caller may opt into a limit via an explicit max_output_tokens.
+  if (chat.max_output_tokens) body.max_output_tokens = chat.max_output_tokens;
+  else if (chat.max_tokens && !chat.ignore_max_tokens) body.max_output_tokens = chat.max_tokens;
   if (typeof chat.temperature === "number") body.temperature = chat.temperature;
   if (chat.response_format && chat.response_format.type === "json_object") {
     body.text = { format: { type: "json_object" } };

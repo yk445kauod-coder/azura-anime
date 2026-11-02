@@ -16,7 +16,7 @@ NASA NTRS ──► harvest ──► clean ──► chunk ──► embed ─�
                                         │  synthesize → verify                  │
                                         └───────────────────┬───────────────────┘
                                                             │
-                              Next.js dashboard ◄───────────┘
+                  React dashboard on Cloudflare Pages ◄────┘
                               (5 features + evidence table)
 ```
 
@@ -56,8 +56,9 @@ NASA NTRS ──► harvest ──► clean ──► chunk ──► embed ─�
 
 | Layer | Technology |
 |---|---|
-| UI | Next.js 15 (App Router), React 19, TypeScript |
-| API | Next.js route handlers (`src/app/api/*`) |
+| UI | React 19 + TypeScript, built with Vite (`web/`) |
+| Hosting | Cloudflare Pages (`ignis-1j3.pages.dev`) |
+| API | Cloudflare Worker `ignis-agent` (serverless, Neon over HTTP) + Pages Function `/api/*` proxy |
 | Agent / RAG | Python (`pipeline/lib/agent.py`, `retrieve.py`, `synth.py`) |
 | Database | Neon Postgres 18 + **pgvector** (HNSW) + `pg_trgm` |
 | Embeddings | `BAAI/bge-small-en-v1.5` (384-d, local ONNX via `fastembed`) |
@@ -103,8 +104,7 @@ insight · pipeline_run · llm_cache · dedupe_map · conversation · message
 ## Quick start
 
 ```bash
-npm install
-cp .env.example .env.local          # fill in DATABASE_URL + storage keys
+cp .env.example .env                # fill in DATABASE_URL + storage keys
 
 npm run db:migrate                  # create the ignis schema
 npm run pipeline:collect            # harvest NASA NTRS (default target 300 MB)
@@ -112,8 +112,24 @@ npm run pipeline:clean              # parse, normalise, dedupe, extract findings
 npm run pipeline:index              # chunk + embed (local, no API key)
 npm run pipeline:analyze            # generate fire-safety insights
 
-npm run dev                         # http://localhost:3000
+npm run web:install                 # install the React dashboard
+npm run web:dev                     # http://localhost:5173
 ```
+
+The dashboard talks to the `ignis-agent` Cloudflare Worker. Locally, Vite proxies
+`/api/*` to the deployed worker; set `IGNIS_LIVE_URL` to point somewhere else.
+
+### Deploy
+
+```bash
+npm run worker:deploy               # deploy the ignis-agent worker
+npm run web:deploy                  # build + publish to Cloudflare Pages
+```
+
+The Pages project (`ignis`) serves the SPA and a Pages Function forwards `/api/*` to the
+worker, so the browser stays on one origin and SSE streaming passes through untouched.
+
+**Live:** https://ignis-1j3.pages.dev
 
 Already collected the corpus? Rebuild the derived layers only:
 
@@ -154,7 +170,7 @@ and demos are cheap and reproducible.
 | `/api/insights` | GET | fire-safety insights + metric distributions + coverage |
 
 ```bash
-curl -s localhost:3000/api/ask -H 'content-type: application/json' \
+curl -s https://ignis-1j3.pages.dev/api/ask -H 'content-type: application/json' \
   -d '{"question":"How does flame spread over solid fuels differ in microgravity?"}' | jq
 ```
 
@@ -187,6 +203,10 @@ pipeline/
   lib/                  config, db, storage, http, text, chunking, embed, llm,
                         retrieve, synth, agent
 db/migrations/          ignis schema + search functions + seeds
-src/app/api/            REST endpoints
-src/components/         the five dashboard views
+web/                    React + Vite dashboard
+  src/App.tsx             tab shell (overview / assistant / explorer / compare / insights / reports)
+  src/components/         the dashboard views
+  functions/api/          Cloudflare Pages Function: /api/* -> ignis-agent worker
+workers/ignis-agent/    serverless backend: hybrid retrieval, agent loop, report builder
+workers/ignis-gateway/  LLM gateway (upstream agentrouter.org)
 ```

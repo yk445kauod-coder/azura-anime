@@ -219,13 +219,29 @@ def _detect_providers() -> list[Provider]:
 class LLM:
     """A provider chain. Tries each configured provider until one answers."""
 
-    def __init__(self, model: str | None = None, timeout: int = 120, retries: int | None = None,
-                 enabled: bool = True):
+    def __init__(self, model: str | None = None, timeout: int | None = None, retries: int | None = None,
+                 enabled: bool = True, prefer: str | None = None,
+                 provider_models: dict[str, str] | None = None):
         self.providers = _detect_providers() if enabled else []
+        if prefer:
+            # Reorder so the preferred provider is tried first; the rest keep
+            # their configured order as fallback. Unknown names are ignored.
+            wanted = prefer.strip()
+            preferred = [p for p in self.providers if p.name == wanted]
+            if preferred:
+                rest = [p for p in self.providers if p.name != wanted]
+                self.providers = preferred + rest
+        # Per-provider model overrides (e.g. a different deep-reasoning model
+        # on the agentrouter_proxy path). Applied before the blanket override.
+        if provider_models:
+            for p in self.providers:
+                if p.name in provider_models:
+                    p.model = provider_models[p.name]
         if model:
             for p in self.providers:
                 p.model = model
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else int(
+            os.environ.get("IGNIS_LLM_TIMEOUT", "120"))
         self.retries = retries if retries is not None else int(
             os.environ.get("IGNIS_LLM_RETRIES", "4")
         )
@@ -406,7 +422,10 @@ class LLM:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        if json_mode:
+        if json_mode and p.name != "agentrouter_proxy":
+            # agentrouter_proxy (the SI gateway) answers `response_format:
+            # json_object` with an empty body for some models, so we pass
+            # plain text and parse the JSON out of the reply.
             payload["response_format"] = {"type": "json_object"}
         r = requests.post(f"{p.base_url}/chat/completions", json=payload,
                           headers=headers, timeout=self.timeout)
@@ -427,13 +446,21 @@ class LLM:
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             raw = raw[4:] if raw.lower().startswith("json") else raw
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            start, end = raw.find("{"), raw.rfind("}")
-            if start != -1 and end > start:
-                try:
-                    return json.loads(raw[start:end + 1])
-                except json.JSONDecodeError:
-                    pass
-            return {}
+        # Some models emit control chars (un-escaped \n/tabs) or trailing prose
+        # after the JSON object. Decode leniently: find the first balanced '{'
+        # and parse it.
+        start = raw.find("{")
+        if start != -1:
+            decoder = json.JSONDecoder()
+            try:
+                obj, _end = decoder.raw_decode(raw[start:])
+                return obj
+            except json.JSONDecodeError:
+                pass
+        end = raw.rfind("}")
+        if start != -1 and end > start:
+            try:
+                return json.loads(raw[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+        return {}

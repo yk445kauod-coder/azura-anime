@@ -121,6 +121,8 @@ def main() -> int:
             print(json.dumps({"error": "missing 'question'"}))
             return 2
         stream = bool(payload.get("stream", False))
+        mode = payload.get("mode") or None
+        model = payload.get("model") or None
         if stream:
             # NDJSON events: {"event": "...", "data": {...}} on each line,
             # ending with the full AgentResult as the last event.
@@ -129,6 +131,8 @@ def main() -> int:
                 conversation_id=payload.get("conversation_id"),
                 k=int(payload.get("k", 8)),
                 use_llm=bool(payload.get("use_llm", True)),
+                mode=mode,
+                model=model,
                 on_event=lambda ev: _emit(ev),
             )
             _emit({"node": "done", "result": res.as_dict()})
@@ -138,6 +142,8 @@ def main() -> int:
             conversation_id=payload.get("conversation_id"),
             k=int(payload.get("k", 8)),
             use_llm=bool(payload.get("use_llm", True)),
+            mode=mode,
+            model=model,
         )
         result = res.as_dict()
 

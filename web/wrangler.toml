@@ -1,0 +1,6 @@
+name = "ignis"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-01-01"
+
+[vars]
+IGNIS_LIVE_URL = "https://ignis-agent.yk445kauod.workers.dev"

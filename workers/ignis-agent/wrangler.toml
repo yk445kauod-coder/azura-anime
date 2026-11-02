@@ -1,0 +1,25 @@
+name = "ignis-agent"
+main = "src/index.ts"
+compatibility_date = "2024-11-27"
+workers_dev = true
+
+# AI embedding (must match the corpus indexer: BAAI/bge-small-en-v1.5, 384d)
+ai = { binding = "AI" }
+
+# Worker-to-worker HTTP is blocked on *.workers.dev (Cloudflare error 1042),
+# so the gateway is reached through a Service Binding instead.
+[[services]]
+binding = "GATEWAY"
+service = "ignis-gateway"
+
+[vars]
+IGNIS_GATEWAY_URL = "https://ignis-gateway.yk445kauod.workers.dev"
+EMBED_MODEL = "@cf/baai/bge-small-en-v1.5"
+# Must match the `model` column in ignis.chunk_embedding (HF-style id).
+DB_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+DB_QUERY_FN = "ignis.search_chunks_hybrid"
+
+# Secrets are injected at deploy time via wrangler secret / deploy script:
+#   NEON_DATABASE_URL        full postgres:// connection string (unpooled)
+#   IGNIS_PROXY_TOKEN        caller token accepted by ignis-gateway
+#   AGENTROUTER_API_KEY      upstream key passed through to gateway
