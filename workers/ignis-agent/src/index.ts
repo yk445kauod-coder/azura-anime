@@ -230,7 +230,7 @@ async function retrieveGraded(env: Env, question: string, k: number): Promise<Hi
 
 async function llmComplete(env: Env, system: string, user: string, model: string,
                            jsonMode = false, maxTokens = 700,
-                           effort = "low"): Promise<string> {
+                           effort = "low", timeoutMs = 75000): Promise<string> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (env.IGNIS_PROXY_TOKEN) headers["authorization"] = `Bearer ${env.IGNIS_PROXY_TOKEN}`;
   const payload: any = {
@@ -246,6 +246,7 @@ async function llmComplete(env: Env, system: string, user: string, model: string
   if (jsonMode && !model.startsWith("gpt-5.6")) payload.response_format = { type: "json_object" };
   const res = await gatewayFetch(env, "/v1/chat/completions", {
     method: "POST", headers, body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const data: any = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -419,7 +420,10 @@ async function plan(env: Env, question: string, model: string,
                     memoryContext = ""): Promise<{ subs: string[]; terms: string[] }> {
   try {
     const memoryBlock = memoryContext ? `\n\nRelevant memory from earlier sessions:\n${memoryContext}\n` : "";
-    const raw = await llmComplete(env, PLAN_SYSTEM, `Question: ${question}${memoryBlock}\n\n`, model, true, 500);
+    // Planning asks for a small JSON object, but the reasoning models still bill
+    // their scratch work against max_tokens, so 500 is not enough headroom.
+    const planBudget = synthBudgets(model)[0];
+    const raw = await llmComplete(env, PLAN_SYSTEM, `Question: ${question}${memoryBlock}\n\n`, model, true, planBudget);
     const data = parseJsonObject(raw);
     const subs = (data.sub_questions ?? []).filter((s: any) => typeof s === "string" && s.length > 4).slice(0, 4);
     const terms = (data.key_terms ?? []).filter((t: any) => typeof t === "string").slice(0, 12);
@@ -430,6 +434,23 @@ async function plan(env: Env, question: string, model: string,
   }
 }
 
+/**
+ * Output-token budgets to try for a synthesis call, in order.
+ *
+ * These models are reasoning models: they bill hidden reasoning against
+ * `max_tokens` before emitting any visible text. `gpt-5.6-sol` finishes inside
+ * ~400 tokens, but `gpt-6.1-sol` and `gpt-6-astra` routinely burn 900-1800
+ * tokens reasoning and return `finish_reason=incomplete` with empty content at
+ * a 900-token cap. Starting them low would guarantee a failed first attempt on
+ * every question, so they get a larger opening budget.
+ */
+function synthBudgets(model: string): number[] {
+  return /astra|6\.1/.test(model) ? [3000, 6000] : [900, 2500];
+}
+
+/** Total wall-clock allowed for all synthesis attempts on one question. */
+const SYNTH_DEADLINE_MS = 90000;
+
 async function synthesizeWithLLM(env: Env, question: string, hits: Hit[],
                                  subQuestions: string[], model: string): Promise<{ answer: string; claims: any[]; confidence: number }> {
   const evidenceBlocks = hits.slice(0, 5).map((h, i) =>
@@ -438,12 +459,17 @@ async function synthesizeWithLLM(env: Env, question: string, hits: Hit[],
   let user = `Question: ${question}\n\nEvidence:\n${evidence}`;
   if (subQuestions.length) user += `\n\nSub-questions to address: ${subQuestions.join("; ")}`;
 
-  // A reasoning model occasionally spends its whole budget on hidden reasoning
-  // and returns no text, so give the retry a larger output budget.
+  // Each retry gets a larger output budget, and each call is bounded by both a
+  // per-call timeout and the overall deadline so a stalled upstream degrades to
+  // the extractive answer instead of hanging the request for minutes.
+  const deadline = Date.now() + SYNTH_DEADLINE_MS;
   let lastErr: any = null;
-  for (const budget of [900, 2000]) {
+  for (const budget of synthBudgets(model)) {
+    const remaining = deadline - Date.now();
+    if (remaining < 15000) break;
     try {
-      const raw = await llmComplete(env, SYNTH_SYSTEM, user, model, false, budget);
+      const raw = await llmComplete(env, SYNTH_SYSTEM, user, model, false, budget, "low",
+                                    Math.min(75000, remaining));
       const answer = raw.trim();
       if (!answer) throw new Error("empty answer");
       const claims = claimsFromCitations(answer, hits);
@@ -488,6 +514,47 @@ const cors: Record<string, string> = {
   "access-control-allow-headers": "content-type, authorization",
   "access-control-allow-methods": "POST, GET, OPTIONS",
 };
+
+/**
+ * Wrap an SSE handler so the connection stays alive through long silences.
+ *
+ * Synthesis calls the LLM for 10-60s without producing an event, and an idle
+ * SSE connection is closed by the browser and by edge proxies. A comment frame
+ * every 10s costs nothing (SSE clients ignore `:` lines) and keeps the socket
+ * warm, which is what stops the "ERR_CONNECTION_CLOSED" seen on /api/ask.
+ */
+function sseResponse(run: (emit: (event: string, data: any) => void) => Promise<void>): Response {
+  const enc = new TextEncoder();
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  let closed = false;
+  const write = (chunk: string) => {
+    if (closed) return;
+    writer.write(enc.encode(chunk)).catch(() => { closed = true; });
+  };
+  const emit = (event: string, data: any) => write(`data: ${JSON.stringify({ event, data })}\n\n`);
+
+  const heartbeat = setInterval(() => write(": keep-alive\n\n"), 10000);
+  run(emit)
+    .catch((err: any) => emit("error", { error: String(err?.message ?? err) }))
+    .finally(async () => {
+      clearInterval(heartbeat);
+      write(`data: ${JSON.stringify({ event: "close" })}\n\n`);
+      closed = true;
+      try { await writer.close(); } catch { /* client gone */ }
+    });
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      ...cors,
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    },
+  });
+}
 
 /**
  * Run the agentic RAG loop and return the final AgentResult.
@@ -709,6 +776,7 @@ async function buildReport(env: Env, topic: string, questions: string[] | undefi
       const raw = await llmComplete(
         env, SUMMARY_SYSTEM,
         `Report topic: ${topic}\n\nFindings:\n\n${blocks.join("\n\n")}`, llmModel, true,
+        synthBudgets(llmModel)[0],
       );
       const data = parseJsonObject(raw);
       narrative = {
@@ -869,7 +937,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/debug-llm") {
       let info: any = { model: url.searchParams.get("model") || "gpt-6-astra" };
       try {
-        const raw = await llmComplete(env, "Return JSON.", '{"ping": true}', info.model, true);
+        const raw = await llmComplete(env, "Return JSON.", '{"ping": true}', info.model, true, synthBudgets(info.model)[0]);
         info.ok = true;
         info.raw = raw.slice(0, 300);
       } catch (e: any) {
@@ -1036,25 +1104,10 @@ export default {
       // A six-question report cannot fit in a single response budget, so the
       // dashboard reads progress and renders the report as it completes.
       if (rbody.stream) {
-        const enc = new TextEncoder();
-        const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-        const writer = writable.getWriter();
-        const emit = (event: string, data: any) => {
-          writer.write(enc.encode(`data: ${JSON.stringify({ event, data })}\n\n`)).catch(() => {});
-        };
-        buildReport(env, topic, rbody.questions, Number(rbody.k ?? 8), rbody.model,
-                    rbody.max_questions, emit)
-          .then((report) => emit("done", { report, markdown: renderMarkdown(report) }))
-          .catch((err: any) => emit("error", { error: String(err?.message ?? err) }))
-          .finally(async () => {
-            try {
-              await writer.write(enc.encode(`data: ${JSON.stringify({ event: "close" })}\n\n`));
-              await writer.close();
-            } catch { /* client gone */ }
-          });
-        return new Response(readable, {
-          status: 200,
-          headers: { ...cors, "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" },
+        return sseResponse(async (emit) => {
+          const report = await buildReport(env, topic, rbody.questions, Number(rbody.k ?? 8),
+                                           rbody.model, rbody.max_questions, emit);
+          emit("done", { report, markdown: renderMarkdown(report) });
         });
       }
 
@@ -1139,27 +1192,8 @@ export default {
       }
     }
 
-    const enc = new TextEncoder();
-    // Live SSE: events are written as they are produced so the dashboard shows
-    // plan → retrieve → synthesize progress instead of waiting for the answer.
-    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-    const writer = writable.getWriter();
-    const emit = (node: string, data: any) => {
-      writer.write(enc.encode(`data: ${JSON.stringify({ event: node, data })}\n\n`)).catch(() => {});
-    };
-    runAgent(env, question, mode, model, k, emit, conversationId)
-      .then((result) => emit("done", result))
-      .catch((err: any) => emit("error", { error: String(err?.message ?? err) }))
-      .finally(async () => {
-        try {
-          await writer.write(enc.encode(`data: ${JSON.stringify({ event: "close" })}\n\n`));
-          await writer.close();
-        } catch { /* client gone */ }
-      });
-
-    return new Response(readable, {
-      status: 200,
-      headers: { ...cors, "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" },
-    });
+    return sseResponse((emit) =>
+      runAgent(env, question, mode, model, k, emit, conversationId)
+        .then((result) => emit("done", result)));
   },
 };
