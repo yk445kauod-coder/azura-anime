@@ -33,6 +33,8 @@ class FakeResponse:
 
 
 PROVIDER_ENV_VARS = (
+    "CLOUDFLARE_GATEWAY_ID", "CLOUDFLARE_GATEWAY_PROVIDER", "CLOUDFLARE_GATEWAY_KEY",
+    "CLOUDFLARE_GATEWAY_MODEL", "CLOUDFLARE_GATEWAY_STYLE",
     "IGNIS_AGENTROUTER_PROXY_URL", "IGNIS_PROXY_TOKEN", "IGNIS_AGENTROUTER_MODEL",
     "GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_BASE_URL",
     "AGENTROUTER_API_KEY", "AGENTROUTER_MODEL", "AGENTROUTER_BASE_URL", "AGENTROUTER_STYLE",
@@ -230,6 +232,63 @@ def _anthropic_ok(text="from claude"):
         "content": [{"type": "text", "text": text}],
         "usage": {"input_tokens": 5, "output_tokens": 3},
     })
+
+
+# --------------------------------------------------------------------------- #
+# Cloudflare AI Gateway
+# --------------------------------------------------------------------------- #
+def test_gateway_provider_needs_provider_and_key(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    assert llm_mod._build("cloudflare_gateway") is None
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_PROVIDER", "openai")
+    assert llm_mod._build("cloudflare_gateway") is None
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_KEY", "upstream-key")
+    assert llm_mod._build("cloudflare_gateway") is not None
+
+
+def test_gateway_provider_builds_the_account_gateway_provider_path(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_PROVIDER", "openai")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_KEY", "upstream-key")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_MODEL", "claude-opus-4-6")
+    monkeypatch.delenv("CLOUDFLARE_GATEWAY_ID", raising=False)
+    provider = llm_mod._build("cloudflare_gateway")
+    assert provider.base_url == (
+        "https://gateway.ai.cloudflare.com/v1/acct123/default/openai")
+    assert provider.api_key == "upstream-key"
+    assert provider.model == "claude-opus-4-6"
+    assert provider.style == "openai"
+
+
+def test_gateway_provider_honours_a_named_gateway(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_ID", "ignis")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_PROVIDER", "google-ai-studio")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_KEY", "gk")
+    provider = llm_mod._build("cloudflare_gateway")
+    assert provider.base_url == (
+        "https://gateway.ai.cloudflare.com/v1/acct123/ignis/google-ai-studio")
+
+
+def test_gateway_provider_sends_the_upstream_key_to_the_gateway(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_PROVIDER", "openai")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_KEY", "upstream-key")
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS", "cloudflare_gateway")
+    llm = llm_mod.LLM()
+    seen = {}
+
+    def fake_post(url, **kw):
+        seen["url"] = url
+        seen["auth"] = kw["headers"]["Authorization"]
+        return _ok("via gateway")
+
+    monkeypatch.setattr(llm_mod.requests, "post", fake_post)
+    result = llm.complete("s", "u")
+    assert seen["url"] == (
+        "https://gateway.ai.cloudflare.com/v1/acct123/default/openai/chat/completions")
+    assert seen["auth"] == "Bearer upstream-key"
+    assert result.provider == "cloudflare_gateway"
 
 
 # --------------------------------------------------------------------------- #

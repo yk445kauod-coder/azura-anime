@@ -5,6 +5,13 @@ single slow or unreachable provider degrades the answer instead of failing the
 request. Configure the order with ``IGNIS_LLM_PROVIDERS`` (comma separated);
 the default order is ``gemini,agentrouter,openai,openrouter,ollama``.
 
+  * ``cloudflare_gateway`` — Cloudflare AI Gateway. Proxies a third-party
+                      provider (AgentRouter, Gemini, ...) and egresses from
+                      Cloudflare's network, a different path from the blocked
+                      local one. Needs AI Gateway permission on the token.
+                      (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_GATEWAY_ID,
+                      CLOUDFLARE_GATEWAY_PROVIDER, CLOUDFLARE_GATEWAY_KEY,
+                      CLOUDFLARE_GATEWAY_MODEL)
   * ``agentrouter_proxy`` — the AgentRouter API reached through the deployed
                       Neon Function in ``functions/ignisllm``. Use this on a
                       network the WAF blocks: the function egresses from Neon
@@ -55,8 +62,9 @@ from .db import connect
 
 log = logging.getLogger("ignis.llm")
 
-DEFAULT_ORDER = ("agentrouter_proxy", "cloudflare", "neon", "gemini",
-                 "agentrouter", "openai", "openrouter", "ollama")
+DEFAULT_ORDER = ("cloudflare_gateway", "agentrouter_proxy", "cloudflare",
+                 "neon", "gemini", "agentrouter", "openai", "openrouter",
+                 "ollama")
 
 GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 # AgentRouter's Anthropic-compatible base carries no /v1: the Messages path is
@@ -64,6 +72,7 @@ GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 AGENTROUTER_ANTHROPIC_BASE = "https://agentrouter.org"
 AGENTROUTER_OPENAI_BASE = "https://agentrouter.org/v1"
 CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4/accounts"
+CLOUDFLARE_GATEWAY_BASE = "https://gateway.ai.cloudflare.com/v1"
 ANTHROPIC_VERSION = "2023-06-01"
 
 
@@ -99,6 +108,20 @@ def _model_for(env: str, default: str) -> str:
 
 
 def _build(name: str) -> Provider | None:
+    if name == "cloudflare_gateway":
+        account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+        gateway = os.environ.get("CLOUDFLARE_GATEWAY_ID", "default")
+        provider = os.environ.get("CLOUDFLARE_GATEWAY_PROVIDER")
+        key = os.environ.get("CLOUDFLARE_GATEWAY_KEY")
+        if not (account and provider and key):
+            return None
+        # The gateway path encodes account, gateway, and upstream provider; the
+        # client appends /chat/completions, so /v1 is not part of the base.
+        return Provider("cloudflare_gateway",
+                        f"{CLOUDFLARE_GATEWAY_BASE}/{account}/{gateway}/{provider}",
+                        key,
+                        _model_for("CLOUDFLARE_GATEWAY_MODEL", ""),
+                        style=os.environ.get("CLOUDFLARE_GATEWAY_STYLE", "openai"))
     if name == "agentrouter_proxy":
         url = os.environ.get("IGNIS_AGENTROUTER_PROXY_URL")
         if not url:

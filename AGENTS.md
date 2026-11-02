@@ -30,6 +30,7 @@ Default order: `cloudflare, neon, gemini, agentrouter, openai, openrouter, ollam
 | `cloudflare` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` | Workers AI, free tier. Preferred: account-scoped, so no third-party WAF sits in the path. |
 | `neon` | `NEON_AI_GATEWAY_BASE_URL`, `NEON_AI_GATEWAY_TOKEN` | Neon AI Gateway. Needs a paid Neon plan. |
 | `gemini` | `GEMINI_API_KEY` | Free tier throttles hard; retry-with-backoff mitigates. |
+| `cloudflare_gateway` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_GATEWAY_PROVIDER`, `CLOUDFLARE_GATEWAY_KEY` | AI Gateway. Needs AI Gateway permission on the token — see below. |
 | `agentrouter_proxy` | `IGNIS_AGENTROUTER_PROXY_URL`, `IGNIS_PROXY_TOKEN` | AgentRouter via a Neon Function. Use when the local network is WAF-blocked. |
 | `agentrouter` | `AGENTROUTER_API_KEY` | Direct. Speaks Anthropic Messages by default. See below. |
 
@@ -37,6 +38,19 @@ A provider whose credentials are incomplete is skipped, so a half-configured
 gateway never enters the chain. With no provider available, callers fall back to
 the deterministic extractive synthesizer in `synth.py` — grounded and cited, but
 verbatim rather than fluent.
+
+### Cloudflare AI Gateway is blocked at the token level
+
+The token in this workspace verifies as active but cannot touch AI Gateway. The
+decisive evidence: a request to a **bogus gateway name** returns the same
+`2009 Unauthorized` as a real one, Workers AI *through* the gateway fails while
+Workers AI *direct* succeeds, and `GET /accounts/<id>` returns
+`9109 Unauthorized to access requested resource`.
+
+So this is not a missing gateway or a bad path — the token lacks the account
+permission. `cloudflare_gateway` is implemented and tested, and it will start
+working the moment the token is granted AI Gateway access; no code change needed.
+Mint a token with **AI Gateway: Read** and set the `CLOUDFLARE_GATEWAY_*` vars.
 
 ### Reaching AgentRouter from a blocked network
 
