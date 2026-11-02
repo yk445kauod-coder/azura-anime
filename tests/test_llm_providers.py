@@ -35,6 +35,7 @@ class FakeResponse:
 PROVIDER_ENV_VARS = (
     "CLOUDFLARE_GATEWAY_ID", "CLOUDFLARE_GATEWAY_PROVIDER", "CLOUDFLARE_GATEWAY_KEY",
     "CLOUDFLARE_GATEWAY_MODEL", "CLOUDFLARE_GATEWAY_STYLE",
+    "CLOUDFLARE_GATEWAY_AUTH_TOKEN",
     "IGNIS_AGENTROUTER_PROXY_URL", "IGNIS_PROXY_TOKEN", "IGNIS_AGENTROUTER_MODEL",
     "GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_BASE_URL",
     "AGENTROUTER_API_KEY", "AGENTROUTER_MODEL", "AGENTROUTER_BASE_URL", "AGENTROUTER_STYLE",
@@ -268,6 +269,25 @@ def test_gateway_provider_honours_a_named_gateway(monkeypatch):
     provider = llm_mod._build("cloudflare_gateway")
     assert provider.base_url == (
         "https://gateway.ai.cloudflare.com/v1/acct123/ignis/google-ai-studio")
+
+
+def test_gateway_provider_sends_the_cloudflare_token_for_authenticated_gateways(monkeypatch):
+    """Provider-native endpoints need cf-aig-authorization alongside the key."""
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_PROVIDER", "openai")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_KEY", "upstream-key")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_AUTH_TOKEN", "cf-token")
+    provider = llm_mod._build("cloudflare_gateway")
+    assert provider.headers["cf-aig-authorization"] == "Bearer cf-token"
+    assert provider.api_key == "upstream-key"
+
+
+def test_gateway_provider_omits_the_aig_header_when_not_configured(monkeypatch):
+    """An unauthenticated gateway takes the provider key alone."""
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_PROVIDER", "openai")
+    monkeypatch.setenv("CLOUDFLARE_GATEWAY_KEY", "upstream-key")
+    assert "cf-aig-authorization" not in llm_mod._build("cloudflare_gateway").headers
 
 
 def test_gateway_provider_sends_the_upstream_key_to_the_gateway(monkeypatch):

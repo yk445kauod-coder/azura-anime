@@ -39,18 +39,34 @@ gateway never enters the chain. With no provider available, callers fall back to
 the deterministic extractive synthesizer in `synth.py` — grounded and cited, but
 verbatim rather than fluent.
 
-### Cloudflare AI Gateway is blocked at the token level
+### Cloudflare AI Gateway needs a different token
 
-The token in this workspace verifies as active but cannot touch AI Gateway. The
-decisive evidence: a request to a **bogus gateway name** returns the same
-`2009 Unauthorized` as a real one, Workers AI *through* the gateway fails while
-Workers AI *direct* succeeds, and `GET /accounts/<id>` returns
-`9109 Unauthorized to access requested resource`.
+The token in this workspace cannot use AI Gateway, and the root cause is scope
+rather than configuration. `GET /accounts` returns **success with zero
+accounts** (`count: 0`), so the token is scoped to Workers AI alone and sees no
+account to attach a gateway to. Supporting evidence: a request to a **bogus
+gateway name** returns the same `2009 Unauthorized` as a real one, and Workers AI
+*through* the gateway fails while Workers AI *direct* succeeds with the same
+token.
 
-So this is not a missing gateway or a bad path — the token lacks the account
-permission. `cloudflare_gateway` is implemented and tested, and it will start
-working the moment the token is granted AI Gateway access; no code change needed.
-Mint a token with **AI Gateway: Read** and set the `CLOUDFLARE_GATEWAY_*` vars.
+To enable it, mint a token with **Account → AI Gateway → Read** (add **Workers
+Scripts → Edit** if wrangler should deploy), then set in `.env`:
+
+```
+CLOUDFLARE_GATEWAY_ID="default"
+CLOUDFLARE_GATEWAY_PROVIDER="openai"        # or google-ai-studio, anthropic
+CLOUDFLARE_GATEWAY_KEY="<upstream provider key>"
+CLOUDFLARE_GATEWAY_MODEL="claude-opus-4-6"
+CLOUDFLARE_GATEWAY_AUTH_TOKEN="<new Cloudflare token>"   # if Authenticated Gateway is on
+```
+
+`CLOUDFLARE_GATEWAY_AUTH_TOKEN` is not optional in practice: a gateway with
+Authenticated Gateway enabled rejects requests that lack `cf-aig-authorization`,
+which is a *separate* header from the provider's own `Authorization`. The
+provider sends both when the variable is set.
+
+Then confirm with `npm run pipeline:doctor`, which probes whichever providers
+have credentials. No code change is needed once the token is in place.
 
 ### Reaching AgentRouter from a blocked network
 

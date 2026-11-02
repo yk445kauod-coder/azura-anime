@@ -115,13 +115,22 @@ def _build(name: str) -> Provider | None:
         key = os.environ.get("CLOUDFLARE_GATEWAY_KEY")
         if not (account and provider and key):
             return None
+        # An authenticated gateway wants the Cloudflare token in
+        # cf-aig-authorization, alongside the provider key in Authorization.
+        # Without it the gateway answers 2009 Unauthorized before reaching the
+        # provider.
+        headers = {}
+        aig_token = os.environ.get("CLOUDFLARE_GATEWAY_AUTH_TOKEN")
+        if aig_token:
+            headers["cf-aig-authorization"] = f"Bearer {aig_token}"
         # The gateway path encodes account, gateway, and upstream provider; the
         # client appends /chat/completions, so /v1 is not part of the base.
         return Provider("cloudflare_gateway",
                         f"{CLOUDFLARE_GATEWAY_BASE}/{account}/{gateway}/{provider}",
                         key,
                         _model_for("CLOUDFLARE_GATEWAY_MODEL", ""),
-                        style=os.environ.get("CLOUDFLARE_GATEWAY_STYLE", "openai"))
+                        style=os.environ.get("CLOUDFLARE_GATEWAY_STYLE", "openai"),
+                        headers=headers)
     if name == "agentrouter_proxy":
         url = os.environ.get("IGNIS_AGENTROUTER_PROXY_URL")
         if not url:
