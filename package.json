@@ -2,7 +2,7 @@
   "name": "ignis",
   "version": "0.1.0",
   "private": true,
-  "description": "IGNIS \u2014 AI-powered research platform for NASA microgravity combustion and spacecraft fire-safety data",
+  "description": "IGNIS — AI-powered research platform for NASA microgravity combustion and spacecraft fire-safety data",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -18,15 +18,18 @@
     "pipeline:all": "npm run db:migrate && npm run pipeline:collect && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze",
     "pipeline:rebuild": "npm run db:migrate && npm run pipeline:clean && npm run pipeline:index && npm run pipeline:analyze",
     "pipeline:report": "python3 pipeline/report.py",
-    "pipeline:doctor": "python3 pipeline/llm_doctor.py"
+    "pipeline:doctor": "python3 pipeline/llm_doctor.py",
+    "functions:deploy": "bash scripts/deploy-function.sh",
+    "functions:test": "node scripts/test-function.mjs"
   },
   "dependencies": {
     "next": "15.5.4",
+    "pg": "^8.13.1",
     "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "pg": "^8.13.1"
+    "react-dom": "19.1.0"
   },
   "devDependencies": {
+    "@neon/config": "^1.10.0",
     "@types/node": "^20.19.19",
     "@types/pg": "^8.11.10",
     "@types/react": "^19",

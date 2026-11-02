@@ -33,6 +33,7 @@ class FakeResponse:
 
 
 PROVIDER_ENV_VARS = (
+    "IGNIS_AGENTROUTER_PROXY_URL", "IGNIS_PROXY_TOKEN", "IGNIS_AGENTROUTER_MODEL",
     "GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_BASE_URL",
     "AGENTROUTER_API_KEY", "AGENTROUTER_MODEL", "AGENTROUTER_BASE_URL", "AGENTROUTER_STYLE",
     "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL",
@@ -229,6 +230,50 @@ def _anthropic_ok(text="from claude"):
         "content": [{"type": "text", "text": text}],
         "usage": {"input_tokens": 5, "output_tokens": 3},
     })
+
+
+# --------------------------------------------------------------------------- #
+# AgentRouter through the Neon Function proxy
+# --------------------------------------------------------------------------- #
+def test_agentrouter_proxy_requires_a_deployed_url(monkeypatch):
+    assert llm_mod._build("agentrouter_proxy") is None
+
+
+def test_agentrouter_proxy_targets_the_function_v1_base(monkeypatch):
+    monkeypatch.setenv("IGNIS_AGENTROUTER_PROXY_URL",
+                       "https://ep-x-ignisllm.compute.c-3.us-east-1.aws.neon.tech/")
+    monkeypatch.setenv("IGNIS_PROXY_TOKEN", "shh")
+    monkeypatch.delenv("IGNIS_AGENTROUTER_MODEL", raising=False)
+    monkeypatch.delenv("IGNIS_LLM_MODEL", raising=False)
+    provider = llm_mod._build("agentrouter_proxy")
+    # The handler forwards the path verbatim, so /v1 belongs to the base.
+    assert provider.base_url == (
+        "https://ep-x-ignisllm.compute.c-3.us-east-1.aws.neon.tech/v1")
+    assert provider.api_key == "shh"
+    assert provider.model == "claude-opus-4-6"
+    assert provider.style == "openai"
+
+
+def test_agentrouter_proxy_sends_the_caller_token_not_the_upstream_key(monkeypatch):
+    monkeypatch.setenv("IGNIS_AGENTROUTER_PROXY_URL", "https://fn.example")
+    monkeypatch.setenv("IGNIS_PROXY_TOKEN", "caller-secret")
+    # A real upstream key is present too; it must not travel to the function.
+    monkeypatch.setenv("AGENTROUTER_API_KEY", "upstream-secret")
+    monkeypatch.setenv("IGNIS_LLM_PROVIDERS", "agentrouter_proxy")
+    llm = llm_mod.LLM()
+    seen = {}
+
+    def fake_post(url, **kw):
+        seen["url"] = url
+        seen["auth"] = kw["headers"]["Authorization"]
+        return _ok("proxied")
+
+    monkeypatch.setattr(llm_mod.requests, "post", fake_post)
+    result = llm.complete("s", "u")
+    assert seen["url"] == "https://fn.example/v1/chat/completions"
+    assert seen["auth"] == "Bearer caller-secret"
+    assert "upstream-secret" not in seen["auth"]
+    assert result.provider == "agentrouter_proxy"
 
 
 # --------------------------------------------------------------------------- #

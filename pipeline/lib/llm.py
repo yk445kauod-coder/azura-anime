@@ -5,6 +5,11 @@ single slow or unreachable provider degrades the answer instead of failing the
 request. Configure the order with ``IGNIS_LLM_PROVIDERS`` (comma separated);
 the default order is ``gemini,agentrouter,openai,openrouter,ollama``.
 
+  * ``agentrouter_proxy`` — the AgentRouter API reached through the deployed
+                      Neon Function in ``functions/ignisllm``. Use this on a
+                      network the WAF blocks: the function egresses from Neon
+                      instead. (IGNIS_AGENTROUTER_PROXY_URL, IGNIS_PROXY_TOKEN,
+                      IGNIS_AGENTROUTER_MODEL)
   * ``cloudflare``  — Cloudflare Workers AI, free tier. Runs open models
                       (Llama, Qwen, GPT-OSS, Mistral) on Cloudflare's edge, so
                       requests never touch a third-party WAF.
@@ -50,8 +55,8 @@ from .db import connect
 
 log = logging.getLogger("ignis.llm")
 
-DEFAULT_ORDER = ("cloudflare", "neon", "gemini", "agentrouter", "openai",
-                 "openrouter", "ollama")
+DEFAULT_ORDER = ("agentrouter_proxy", "cloudflare", "neon", "gemini",
+                 "agentrouter", "openai", "openrouter", "ollama")
 
 GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 # AgentRouter's Anthropic-compatible base carries no /v1: the Messages path is
@@ -94,6 +99,16 @@ def _model_for(env: str, default: str) -> str:
 
 
 def _build(name: str) -> Provider | None:
+    if name == "agentrouter_proxy":
+        url = os.environ.get("IGNIS_AGENTROUTER_PROXY_URL")
+        if not url:
+            return None
+        # The function forwards the path verbatim, so /v1 is part of the base.
+        base = url.rstrip("/") + "/v1"
+        return Provider("agentrouter_proxy", base,
+                        os.environ.get("IGNIS_PROXY_TOKEN", ""),
+                        _model_for("IGNIS_AGENTROUTER_MODEL", "claude-opus-4-6"),
+                        min_max_tokens=1024)
     if name == "cloudflare":
         account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
         token = os.environ.get("CLOUDFLARE_API_TOKEN")

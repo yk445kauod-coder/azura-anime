@@ -30,12 +30,34 @@ Default order: `cloudflare, neon, gemini, agentrouter, openai, openrouter, ollam
 | `cloudflare` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` | Workers AI, free tier. Preferred: account-scoped, so no third-party WAF sits in the path. |
 | `neon` | `NEON_AI_GATEWAY_BASE_URL`, `NEON_AI_GATEWAY_TOKEN` | Neon AI Gateway. Needs a paid Neon plan. |
 | `gemini` | `GEMINI_API_KEY` | Free tier throttles hard; retry-with-backoff mitigates. |
-| `agentrouter` | `AGENTROUTER_API_KEY` | Speaks Anthropic Messages by default. See below. |
+| `agentrouter_proxy` | `IGNIS_AGENTROUTER_PROXY_URL`, `IGNIS_PROXY_TOKEN` | AgentRouter via a Neon Function. Use when the local network is WAF-blocked. |
+| `agentrouter` | `AGENTROUTER_API_KEY` | Direct. Speaks Anthropic Messages by default. See below. |
 
 A provider whose credentials are incomplete is skipped, so a half-configured
 gateway never enters the chain. With no provider available, callers fall back to
 the deterministic extractive synthesizer in `synth.py` — grounded and cited, but
 verbatim rather than fluent.
+
+### Reaching AgentRouter from a blocked network
+
+`functions/ignisllm/` is a Neon Function that proxies AgentRouter. The point is
+egress: the function runs on Neon's network, so it can reach the gateway from
+networks the WAF blocks. Callers authenticate with `IGNIS_PROXY_TOKEN`; the
+handler attaches the real upstream key, so the paid credential never reaches the
+browser or the Next.js process.
+
+Deploy with `npm run functions:deploy`, which runs `neon deploy --env .env`,
+reads back the invocation URL, and writes `IGNIS_AGENTROUTER_PROXY_URL` into
+`.env`. `neon auth` (browser sign-in) must be done once by a human first — an
+unattended agent must not attempt it.
+
+Both `AGENTROUTER_API_KEY` and `IGNIS_PROXY_TOKEN` must be non-empty in `.env`
+before deploying: `neon.ts` declares them, and `defineConfig` throws on a
+missing value.
+
+`npm run functions:test` exercises the real handler with real `Request` objects.
+Locally the upstream call returns the WAF page, which the handler reports as a
+502 — that is the expected local result, not a bug.
 
 ### AgentRouter is unreachable from this network
 
@@ -48,7 +70,14 @@ makes this a network/IP-level block rather than a client-fingerprint one.
 
 Do not spend time on in-process workarounds. Use Cloudflare Workers AI instead.
 
-The provider keeps Anthropic Messages as its default wire shape because the WAF
+### Two AgentRouter paths, two wire shapes
+
+`agentrouter_proxy` uses the **OpenAI** dialect. The function forwards the path
+verbatim, so the base URL carries `/v1` and the client appends
+`/chat/completions`. `agentrouter` (direct) defaults to **Anthropic Messages**,
+where the base URL must *not* carry `/v1` because the SDK appends `/v1/messages`.
+
+The direct provider keeps Anthropic Messages as its default wire shape because the WAF
 allowlists that fingerprint; `AGENTROUTER_STYLE=openai` switches to
 chat-completions. For the Messages path the base URL must **not** carry `/v1`,
 since the client appends `/v1/messages` itself.
@@ -79,6 +108,9 @@ does this with an autouse fixture over `PROVIDER_ENV_VARS`.
 - Provider tests patch `llm_mod.requests.post`; no network calls.
 - `complete_json` degrades to `{}` on unparseable output rather than raising, so
   a JSON-mode regression shows up as missing data, not an exception.
+- Cloudflare's free tier is CPU-metered, and Workers AI requests are billed in
+  "neurons" (a single 120B call cost ~4). It is fine for interactive use but is
+  not the place for bulk corpus processing; prefer a self-hosted model there.
 - The Cloudflare token in this workspace is read-only for Workers *scripts*
   (`PUT /accounts/<id>/workers/scripts/<name>` returns "No access to the
   specified resource"), so a proxy Worker cannot be deployed with it.
