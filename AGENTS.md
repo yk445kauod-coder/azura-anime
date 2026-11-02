@@ -244,3 +244,38 @@ Measured after this change: 5/5 non-extractive answers, 7-12s, confidence
 `fastembed` installed, plus a reachable `DATABASE_URL`; without them the
 collection errors are import failures, not real test failures. With them:
 111 passed.
+
+---
+
+## Documentation set
+
+Three guides in `docs/`, all written against the live system — re-read the deployed
+worker and the Neon schema before trusting any of them, they drift.
+
+| File | Covers |
+|---|---|
+| `docs/API.md` | Endpoints, response fields, SSE event order, `stop_reason` contract |
+| `docs/SCHEMA.md` | 25 tables + 3 views, relationships, data limitations |
+| `docs/FRONTEND.md` | Design tokens, UX rules, i18n workflow, shipped-bug list |
+
+### Facts that are easy to get wrong
+
+- **Live URL is `ignis-project.pages.dev`.** `ignis.pages.dev` belongs to a third party.
+- **The live agent is `workers/ignis-agent/src/agentic.ts`**, not `pipeline/lib/agent.py`.
+  The Python is a reference implementation.
+- **Agent answers are markdown.** Render with the `Markdown` component. Never emit a bare
+  `<li>` (invalid HTML, browsers drop the marker) and never put `white-space: pre-wrap`
+  on a container holding block elements. Both bugs shipped once.
+- **Citations are positional.** `[3]` means `evidence[2]`. Do not reorder `evidence`.
+- **`conversation_id` must be a UUID**, or `/api/ask` and `/api/memory` return 500.
+- **Null conditions are not zero.** `o2_fraction` and `pressure_kpa` are null for most
+  campaigns; render "not reported".
+- **Extracted findings are candidates.** Every `finding` carries `evidence_quote`; show it.
+- **`stop_reason` decides whether an answer is complete.** `final_answer` and
+  `forced_synthesis` are fine; `budget`, `deadline`, `parse_error`, `model_error` are not.
+
+### Credentials
+
+`.env` holds live Neon and S3 credentials and is gitignored. The worker's own secrets
+(`NEON_DATABASE_URL`, `IGNIS_PROXY_TOKEN`, `AGENTROUTER_API_KEY`) live in Cloudflare via
+`wrangler secret put`. Neither belongs in the repository.
