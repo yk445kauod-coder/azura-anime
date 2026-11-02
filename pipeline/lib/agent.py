@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from typing import Any
 from . import config
 from .db import connect, execute, fetch_one
 from .llm import LLM
+from .memory import MemoryStore
 from .retrieve import Hit, grade_hits, retrieve
 from .synth import synthesize_extractive, synthesize_with_llm
 from .text import words
@@ -124,10 +126,13 @@ def heuristic_plan(question: str) -> list[str]:
     return subs[:4]
 
 
-def plan(question: str, llm: LLM) -> tuple[list[str], list[str]]:
+def plan(question: str, llm: LLM, memory_context: str = "") -> tuple[list[str], list[str]]:
+    user_prompt = f"Question: {question}"
+    if memory_context:
+        user_prompt += f"\n\nRelevant context from agent memory:\n{memory_context}"
     if llm.available:
         try:
-            data = llm.complete_json(PLAN_SYSTEM, f"Question: {question}", max_tokens=400)
+            data = llm.complete_json(PLAN_SYSTEM, user_prompt, max_tokens=1200)
             subs = [s for s in (data.get("sub_questions") or []) if isinstance(s, str) and len(s) > 4]
             terms = [t for t in (data.get("key_terms") or []) if isinstance(t, str)]
             if subs:
@@ -180,7 +185,7 @@ def llm_grade(sub_question: str, hits: list[Hit], llm: LLM) -> tuple[str, float,
         data = llm.complete_json(
             GRADE_SYSTEM,
             f"Sub-question: {sub_question}\n\nEvidence:\n" + "\n\n".join(blocks),
-            max_tokens=300,
+            max_tokens=1200,
         )
         verdict = str(data.get("verdict", "partial")).lower()
         if verdict not in ("sufficient", "partial", "insufficient"):
@@ -294,7 +299,14 @@ def run_agent(
     k: int = 8,
     max_iterations: int = MAX_ITERATIONS,
     use_llm: bool = True,
+    on_event: Any | None = None,
 ) -> AgentResult:
+    def emit(node: str, **kw) -> None:
+        if on_event is not None:
+            try:
+                on_event({"node": node, **kw})
+            except Exception:
+                log.debug("on_event callback failed", exc_info=True)
     t0 = time.time()
     llm = LLM(enabled=use_llm)
 
@@ -316,9 +328,26 @@ def run_agent(
     except Exception as exc:
         log.debug("agent_run insert failed: %s", exc)
 
+    # ---------------- MEMORY RECALL ----------------
+    memory = MemoryStore(conversation_id=conversation_id)
+    try:
+        recalled = memory.recall(question, top_k=4, min_score=0.45)
+    except Exception as exc:
+        log.debug("memory recall failed: %s", exc)
+        recalled = []
+    memory_context = "\n".join(f"[{h.kind}] {h.content}" for h in recalled)
+    if recalled:
+        emit("memory", n_recalled=len(recalled),
+             contents=[h.content[:120] for h in recalled])
+        trace.append({"node": "memory", "n_recalled": len(recalled)})
+        _persist_step(run_id, step_no(), "memory",
+                      thought=f"{len(recalled)} related memory entr(ies) retrieved",
+                      tool="vector_memory", tool_output={"recalled": [h.content for h in recalled]})
+
     # ---------------- PLAN ----------------
     t = time.time()
-    sub_questions, key_terms = plan(question, llm)
+    sub_questions, key_terms = plan(question, llm, memory_context=memory_context)
+    emit("plan", sub_questions=sub_questions, key_terms=key_terms)
     trace.append({"node": "plan", "sub_questions": sub_questions, "key_terms": key_terms})
     _persist_step(run_id, step_no(), "plan",
                   thought=f"Decomposed into {len(sub_questions)} sub-questions",
@@ -339,7 +368,7 @@ def run_agent(
             hits = retrieve(sq, k=k, pool=80)
             latency = int((time.time() - t) * 1000)
 
-            if llm.available:
+            if llm.available and os.environ.get("IGNIS_LLM_GRADE", "0") == "1":
                 verdict, score, relevant = llm_grade(sq, hits, llm)
                 for i, h in enumerate(hits, 1):
                     h.relevance = "relevant" if i in relevant else (
@@ -349,6 +378,9 @@ def run_agent(
                 verdict, score = heuristic_grade(hits, sq)
                 relevant = []
 
+            emit("retrieve", iteration=iteration, sub_question=sq, verdict=verdict,
+                 score=score, n_hits=len(hits),
+                 top_score=round(hits[0].final_score, 4) if hits else 0.0)
             trace.append({"node": "retrieve", "iteration": iteration, "sub_question": sq,
                           "verdict": verdict, "score": score, "n_hits": len(hits),
                           "top_score": round(hits[0].final_score, 4) if hits else 0.0})
@@ -381,6 +413,7 @@ def run_agent(
             if expanded not in seen:
                 new_subs.append(expanded)
                 seen.add(expanded)
+        emit("expand", from_=thin[:2], to=new_subs, iteration=iteration)
         trace.append({"node": "expand", "from": thin[:2], "to": new_subs})
         _persist_step(run_id, step_no(), "expand",
                       thought=f"{len(thin)} sub-question(s) had thin evidence; expanding",
@@ -409,6 +442,7 @@ def run_agent(
         synth = synthesize_extractive(question, relevant_hits, sub_questions)
         provider, model = "extractive", "ignis-extractive"
 
+    emit("synthesize", provider=provider, claims=len(synth["claims"]))
     _persist_step(run_id, step_no(), "synthesize",
                   thought=f"synthesized with {provider}",
                   tool="synthesize",
@@ -418,6 +452,7 @@ def run_agent(
     # ---------------- VERIFY ----------------
     hits_by_chunk = {h.chunk_id: h for h in relevant_hits}
     claims, verified_ratio = verify_claims(synth["claims"], hits_by_chunk)
+    emit("verify", claims=len(claims), verified_ratio=verified_ratio)
     trace.append({"node": "verify", "claims": len(claims), "verified_ratio": verified_ratio})
     _persist_step(run_id, step_no(), "verify",
                   thought=f"{verified_ratio:.0%} of claims traced to their source chunk",
@@ -442,6 +477,24 @@ def run_agent(
         )
     except Exception as exc:
         log.debug("agent_run update failed: %s", exc)
+
+    # ---------------- MEMORY WRITE ----------------
+    try:
+        memory.remember_session(question, kind="question", importance=0.6, run_id=run_id)
+        memory.remember_session(synth["answer"][:1500], kind="answer", importance=0.7, run_id=run_id)
+        for c in claims[:3]:
+            memory.remember(
+                c.get("claim", "")[:500], kind="finding", importance=0.8,
+                run_id=run_id, chunk_id=c.get("chunk_id"),
+            )
+        memory.consolidate_into_long_term(min_importance=0.75, run_id=run_id)
+        emit("memory_write", n_claims=len(claims[:3]))
+        trace.append({"node": "memory_write", "n_claims": len(claims[:3])})
+    except Exception as exc:
+        log.debug("memory write failed: %s", exc)
+
+    emit("done", confidence=confidence, grounded=bool(claims) and verified_ratio > 0.3,
+         iterations=iterations, latency_ms=latency_ms, provider=provider, model=model)
 
     return AgentResult(
         run_id=run_id, question=question, answer=synth["answer"], claims=claims,

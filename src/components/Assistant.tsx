@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Claim = {
   claim: string; quote: string; title: string; source_id: string;
@@ -27,24 +27,124 @@ const EXAMPLES = [
   "What did SAFFIRE teach us about large-scale fire growth in spacecraft?",
 ];
 
+type MemoryItem = {
+  id: number; kind: string; content: string;
+  importance: number; score?: number; hit_count?: number; created_at: string;
+};
+
 export default function Assistant() {
   const [question, setQuestion] = useState(EXAMPLES[0]);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AskResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showTrace, setShowTrace] = useState(false);
+  const [recalled, setRecalled] = useState<MemoryItem[]>([]);
+  const [memory, setMemory] = useState<{
+    recent: MemoryItem[]; session: MemoryItem[]; stats: { long_term: number; short_term: number };
+  } | null>(null);
+  const [memQuery, setMemQuery] = useState("");
+  const [memLoading, setMemLoading] = useState(false);
+
+  const [stages, setStages] = useState<{ node: string; msg: string }[]>([]);
+
+  async function loadMemory(query = memQuery) {
+    setMemLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (query.trim()) params.set("query", query.trim());
+      const r = await fetch(`/api/memory?${params.toString()}`);
+      const d = await r.json();
+      if (d.recalled?.length) setRecalled(d.recalled);
+      if (d.recent || d.session) setMemory({ recent: d.recent ?? [], session: d.session ?? [], stats: d.stats ?? { long_term: 0, short_term: 0 } });
+    } catch { /* non-fatal */ } finally {
+      setMemLoading(false);
+    }
+  }
+
+  useEffect(() => { loadMemory(""); }, []);
 
   async function ask(q: string) {
-    setLoading(true); setError(null); setResult(null);
+    setLoading(true); setError(null); setResult(null); setStages([]);
     try {
       const r = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, k: 8 }),
+        body: JSON.stringify({ question: q, k: 8, stream: true }),
       });
-      const d = await r.json();
-      if (d.error) setError(d.error);
-      else setResult(d);
+      if (!r.ok || !r.body) {
+        const d = await r.json().catch(() => null);
+        setError(d?.error || `HTTP ${r.status}`);
+        setLoading(false);
+        return;
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const raw = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const m = /^data: (.*)$/m.exec(raw.trim());
+          if (!m) continue;
+          try {
+            const ev = JSON.parse(m[1]);
+            if (ev.event === "error") {
+              setError(ev.data?.error || "pipeline error");
+            } else if (ev.event === "done") {
+              if (ev.data?.result) setResult(ev.data.result);
+              else {
+                setStages((s) => [...s, {
+                  node: "done",
+                  msg: `confidence ${Math.round((ev.data?.confidence ?? 0) * 100)}% · ${ev.data?.latency_ms} ms`,
+                }]);
+              }
+            } else if (ev.event === "plan") {
+              setStages((s) => [...s, {
+                node: "plan",
+                msg: `split into ${ev.data?.sub_questions?.length ?? 0} sub-questions`,
+              }]);
+            } else if (ev.event === "retrieve") {
+              setStages((s) => [...s, {
+                node: "retrieve",
+                msg: `"${ev.data?.sub_question}" → ${ev.data?.n_hits} passages (${ev.data?.verdict})`,
+              }]);
+            } else if (ev.event === "expand") {
+              setStages((s) => [...s, {
+                node: "expand",
+                msg: `query rewritten: ${(ev.data?.to ?? []).join("; ")}`,
+              }]);
+            } else if (ev.event === "memory") {
+              setStages((s) => [...s, {
+                node: "memory",
+                msg: `recalled ${ev.data?.n_recalled ?? 0} relevant memor${(ev.data?.n_recalled ?? 0) === 1 ? "y" : "ies"} from vector store`,
+              }]);
+              setRecalled((ev.data?.contents ?? []).map((c: string) => ({
+                id: -1, kind: "recalled", content: c, importance: 0, score: 0, created_at: new Date().toISOString(),
+              })));
+            } else if (ev.event === "memory_write") {
+              setStages((s) => [...s, {
+                node: "memory_write",
+                msg: `${ev.data?.n_claims ?? 0} finding(s) persisted to long-term memory`,
+              }]);
+              loadMemory();
+            } else if (ev.event === "synthesize") {
+              setStages((s) => [...s, {
+                node: "synthesize",
+                msg: `${ev.data?.provider} · ${ev.data?.claims} claims`,
+              }]);
+            } else if (ev.event === "verify") {
+              setStages((s) => [...s, {
+                node: "verify",
+                msg: `${Math.round((ev.data?.verified_ratio ?? 0) * 100)}% of claims traced`,
+              }]);
+            }
+          } catch { /* skip malformed frame */ }
+        }
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -99,8 +199,16 @@ export default function Assistant() {
 
       {loading && (
         <div className="card muted">
-          <span className="spin" /> Decomposing the question, running hybrid retrieval over
-          the corpus, grading evidence and verifying every claim…
+          <div className="row" style={{ marginBottom: 6 }}>
+            <span className="spin" /> Running the agent — updates appear as each stage completes.
+          </div>
+          <ul className="stream" style={{ margin: 0, paddingLeft: 18 }}>
+            {stages.map((st, i) => (
+              <li key={i}>
+                <span className="tag">{st.node}</span> {st.msg}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -217,6 +325,78 @@ export default function Assistant() {
           )}
         </>
       )}
+
+      <div className="card">
+        <h3>
+          🧠 Agent memory <small>short-term (session) + long-term (cross-session) vector memory</small>
+        </h3>
+        {memory && (
+          <div className="row" style={{ marginBottom: 10 }}>
+            <span className="pill">{memory.stats.long_term} long-term</span>
+            <span className="pill">{memory.stats.short_term} short-term</span>
+          </div>
+        )}
+        <div className="row" style={{ marginBottom: 10, gap: 7 }}>
+          <input
+            style={{ flex: 1 }}
+            placeholder="Vector-recall memory by topic — e.g. 'flame spread rate'"
+            value={memQuery}
+            onChange={(e) => setMemQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") loadMemory(); }}
+          />
+          <button className="ghost" onClick={() => loadMemory()} disabled={memLoading}>
+            {memLoading ? "recalling…" : "Recall"}
+          </button>
+        </div>
+
+        {recalled.length > 0 && (
+          <div className="hit" style={{ marginBottom: 10 }}>
+            <div className="t">Vector recall results</div>
+            <div className="scroll" style={{ maxHeight: 180 }}>
+              {recalled.map((m, i) => (
+                <div key={i} className="meta" style={{ marginBottom: 4 }}>
+                  <span className="tag">{m.kind}</span> {m.content}
+                  {m.score != null && m.score > 0 ? ` · ${(m.score * 100).toFixed(0)}% similar` : ""}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="grid g2">
+          <div>
+            <div className="muted" style={{ marginBottom: 6 }}>Long-term store (most valuable)</div>
+            <div className="scroll" style={{ maxHeight: 240 }}>
+              {(memory?.recent ?? []).map((m) => (
+                <div key={m.id} className="hit">
+                  <div className="t">
+                    <span className="tag">{m.kind}</span> importance {(m.importance * 100).toFixed(0)}%
+                    {m.hit_count ? ` · recalled ${m.hit_count}x` : ""}
+                  </div>
+                  <div className="body">{m.content}</div>
+                </div>
+              ))}
+              {(memory?.recent ?? []).length === 0 && (
+                <div className="muted">No long-term memories yet — ask a question to seed the store.</div>
+              )}
+            </div>
+          </div>
+          <div>
+            <div className="muted" style={{ marginBottom: 6 }}>Short-term store (this session)</div>
+            <div className="scroll" style={{ maxHeight: 240 }}>
+              {(memory?.session ?? []).map((m) => (
+                <div key={m.id} className="hit">
+                  <div className="t"><span className="tag">{m.kind}</span></div>
+                  <div className="body">{m.content}</div>
+                </div>
+              ))}
+              {(memory?.session ?? []).length === 0 && (
+                <div className="muted">Session memory tracks questions/answers for this conversation.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

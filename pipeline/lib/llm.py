@@ -62,9 +62,11 @@ from .db import connect
 
 log = logging.getLogger("ignis.llm")
 
-DEFAULT_ORDER = ("cloudflare_gateway", "agentrouter_proxy", "cloudflare",
-                 "neon", "gemini", "agentrouter", "openai", "openrouter",
-                 "ollama")
+# Fast providers first, slower quality proxies as fallback. Flash-lite
+# answers in <1s; the agentrouter proxy is slower (~26s/call) but more
+# capable, so it is kept as a fallback for quality.
+DEFAULT_ORDER = ("gemini", "cloudflare", "agentrouter_proxy", "cloudflare_gateway",
+                 "neon", "agentrouter", "openai", "openrouter", "ollama")
 
 GEMINI_OPENAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 # AgentRouter's Anthropic-compatible base carries no /v1: the Messages path is
