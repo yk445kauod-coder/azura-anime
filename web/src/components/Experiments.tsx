@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type Experiment = {
   id: number; code: string; name: string; campaign: string | null; status: string | null;
@@ -12,7 +13,8 @@ type Facility = {
   g_level: string | null; description: string | null; experiments: number;
 };
 
-export default function Experiments() {
+export default function Experiments({ focusRef }: { focusRef?: string }) {
+  const { t } = useI18n();
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [selected, setSelected] = useState<Experiment | null>(null);
@@ -41,6 +43,12 @@ export default function Experiments() {
     setDetail({ documents: d.documents ?? [], findings: d.findings ?? [] });
   }
 
+  // Deep link from search: open the named campaign once the list has loaded.
+  useEffect(() => {
+    if (focusRef && experiments.some((e) => e.code === focusRef)) void pick(focusRef);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRef, experiments.length]);
+
   if (error) return <div className="card err">{error}</div>;
 
   return (
@@ -48,7 +56,7 @@ export default function Experiments() {
       <div className="card">
         <h3>
           Experiment Explorer{" "}
-          <small>NASA microgravity combustion campaigns catalogued in IGNIS</small>
+          <small>{t("NASA microgravity combustion campaigns catalogued in IGNIS")}</small>
         </h3>
         <div className="muted">
           Select a campaign to see its conditions, linked NASA documents and extracted findings.
@@ -81,7 +89,7 @@ export default function Experiments() {
           </div>
         ))}
         {experiments.length === 0 && (
-          <div className="card muted">No experiments loaded — check the database connection.</div>
+          <div className="card muted">{t("No experiments loaded \u2014 check the database connection.")}</div>
         )}
       </div>
 
@@ -93,15 +101,15 @@ export default function Experiments() {
             <p className="muted" style={{ fontSize: 12.6, lineHeight: 1.6 }}>{selected.summary}</p>
             <table>
               <tbody>
-                <tr><th>Facility</th><td>{selected.facility_name ?? "—"} ({selected.facility ?? "—"})</td></tr>
-                <tr><th>Platform</th><td>{selected.platform ?? "—"}</td></tr>
-                <tr><th>Gravity level</th><td>{selected.gravity_level ?? "—"}</td></tr>
-                <tr><th>Status</th><td>{selected.status ?? "—"}</td></tr>
-                <tr><th>Fuel</th><td>{selected.fuel_type ?? "—"}</td></tr>
-                <tr><th>Ambient gas</th><td>{selected.ambient_gas ?? "—"}</td></tr>
-                <tr><th>O₂ fraction</th><td>{selected.o2_fraction ?? "not specified in catalog"}</td></tr>
-                <tr><th>Pressure</th><td>{selected.pressure_kpa ? `${selected.pressure_kpa} kPa` : "not specified in catalog"}</td></tr>
-                <tr><th>Aliases</th><td>{selected.aliases?.join(", ") ?? "—"}</td></tr>
+                <tr><th>{t("Facility")}</th><td>{selected.facility_name ?? "—"} ({selected.facility ?? "—"})</td></tr>
+                <tr><th>{t("Platform")}</th><td>{selected.platform ?? "—"}</td></tr>
+                <tr><th>{t("Gravity level")}</th><td>{selected.gravity_level ?? "—"}</td></tr>
+                <tr><th>{t("Status")}</th><td>{selected.status ?? "—"}</td></tr>
+                <tr><th>{t("Fuel")}</th><td>{selected.fuel_type ?? "—"}</td></tr>
+                <tr><th>{t("Ambient gas")}</th><td>{selected.ambient_gas ?? "—"}</td></tr>
+                <tr><th>{t("O\u2082 fraction")}</th><td>{selected.o2_fraction ?? "not specified in catalog"}</td></tr>
+                <tr><th>{t("Pressure")}</th><td>{selected.pressure_kpa ? `${selected.pressure_kpa} kPa` : "not specified in catalog"}</td></tr>
+                <tr><th>{t("Aliases")}</th><td>{selected.aliases?.join(", ") ?? "—"}</td></tr>
               </tbody>
             </table>
           </div>
@@ -138,7 +146,7 @@ export default function Experiments() {
                 </div>
               ))}
               {detail.findings.length === 0 && (
-                <div className="muted">No metric findings extracted for this campaign yet.</div>
+                <div className="muted">{t("No metric findings extracted for this campaign yet.")}</div>
               )}
             </div>
           </div>
@@ -146,11 +154,11 @@ export default function Experiments() {
       )}
 
       <div className="card">
-        <h3>Facilities &amp; platforms <small>where the science happens</small></h3>
+        <h3>{t("Facilities & platforms ")}<small>where the science happens</small></h3>
         <table>
           <thead>
-            <tr><th>Code</th><th>Name</th><th>Platform</th><th>Agency</th><th>g-level</th>
-              <th style={{ textAlign: "right" }}>Experiments</th></tr>
+            <tr><th>{t("Code")}</th><th>{t("Name")}</th><th>{t("Platform")}</th><th>{t("Agency")}</th><th>g-level</th>
+              <th style={{ textAlign: "right" }}>{t("Experiments")}</th></tr>
           </thead>
           <tbody>
             {facilities.map((f) => (

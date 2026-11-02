@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { postSse } from "@/lib/sse";
 import Markdown from "@/components/Markdown";
+import Chart, { type ChartPayload } from "@/components/Chart";
+import ExportBar from "@/components/ExportBar";
+import { useI18n } from "@/lib/i18n";
 
 type Claim = {
   claim: string; quote: string; title: string; source_id: string;
@@ -13,7 +16,8 @@ type Hit = {
   quality_score: number; landing_url: string; relevance: string; sub_question: string | null;
 };
 type AskResult = {
-  run_id: string; question: string; answer: string; claims: Claim[]; evidence: Hit[];
+  run_id: string; question: string; answer: string; chart?: ChartPayload | null;
+  claims: Claim[]; evidence: Hit[];
   sub_questions: string[]; confidence: number; grounded: boolean; iterations: number;
   trace: { node: string; [k: string]: unknown }[];
   latency_ms: number; provider: string; model: string;
@@ -45,6 +49,7 @@ const NODE_LABEL: Record<string, string> = {
   synthesize: "synthesize",
   verify: "verify",
   memory_write: "remember",
+  visualize: "visualize",
   done: "done",
 };
 
@@ -68,6 +73,7 @@ function useConversationId(): string {
 }
 
 export default function Assistant() {
+  const { t } = useI18n();
   const conversationId = useConversationId();
   const [question, setQuestion] = useState(EXAMPLES[0]);
   const [loading, setLoading] = useState(false);
@@ -183,7 +189,7 @@ export default function Assistant() {
     <div className="stack">
       <div className="card">
         <div className="cardhead">
-          <h3>Ask the research agent</h3>
+          <h3>{t("Ask the research agent")}</h3>
           <span className="muted">plan → retrieve → grade → expand → synthesize → verify</span>
         </div>
 
@@ -194,7 +200,7 @@ export default function Assistant() {
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && question.trim() && !loading) ask(question);
           }}
-          placeholder="Ask about flame spread, extinction, smoke detection, suppression, oxygen limits…"
+          placeholder={t("Ask about flame spread, extinction, smoke detection, suppression, oxygen limits…")}
         />
 
         <div className="controls">
@@ -237,7 +243,7 @@ export default function Assistant() {
 
           {result && (
             <button className="ghost" onClick={() => setShowTrace((v) => !v)}>
-              {showTrace ? "Hide" : "Show"} trace
+              {showTrace ? t("Hide") : t("Show")} trace
             </button>
           )}
         </div>
@@ -253,7 +259,7 @@ export default function Assistant() {
 
       {error && (
         <div className="card err">
-          <strong>Agent error.</strong> {error}
+          <strong>{t("Agent error.")}</strong> {error}
         </div>
       )}
 
@@ -290,14 +296,22 @@ export default function Assistant() {
               <span className="pill">{result.model}</span>
             </div>
 
-            <h3 className="sectionhead">Answer</h3>
+            <h3 className="sectionhead">{t("Answer")}</h3>
             <div className="answer">
               <Markdown text={result.answer} />
             </div>
+            <ExportBar
+              markdown={result.answer}
+              charts={result.chart ? [result.chart] : []}
+              title={result.question}
+              filename={`ignis-${result.run_id.slice(0, 8)}`}
+            />
+
+            {result.chart && <Chart chart={result.chart} />}
 
             {result.sub_questions.length > 0 && (
               <>
-                <h3 className="sectionhead">Sub-questions</h3>
+                <h3 className="sectionhead">{t("Sub-questions")}</h3>
                 <ol className="sublist">
                   {result.sub_questions.map((s, i) => <li key={i}>{s}</li>)}
                 </ol>
@@ -308,7 +322,7 @@ export default function Assistant() {
           <div className="grid g2">
             <div className="card">
               <div className="cardhead">
-                <h3>Evidence &amp; sources</h3>
+                <h3>{t("Evidence & sources")}</h3>
                 <span className="muted">each claim traced to a passage</span>
               </div>
               <div className="scroll">
@@ -328,14 +342,14 @@ export default function Assistant() {
                   </div>
                 ))}
                 {result.claims.length === 0 && (
-                  <div className="muted">No grounded claims were extracted for this question.</div>
+                  <div className="muted">{t("No grounded claims were extracted for this question.")}</div>
                 )}
               </div>
             </div>
 
             <div className="card">
               <div className="cardhead">
-                <h3>Ranked passages</h3>
+                <h3>{t("Ranked passages")}</h3>
                 <span className="muted">hybrid RRF + smart ranking</span>
               </div>
               <div className="scroll">
@@ -361,7 +375,7 @@ export default function Assistant() {
           {showTrace && (
             <div className="card">
               <div className="cardhead">
-                <h3>Reasoning trace</h3>
+                <h3>{t("Reasoning trace")}</h3>
                 <span className="muted">run {result.run_id.slice(0, 8)}</span>
               </div>
               <ol className="timeline">
@@ -383,7 +397,7 @@ export default function Assistant() {
 
       <div className="card">
         <div className="cardhead">
-          <h3>Agent memory</h3>
+          <h3>{t("Agent memory")}</h3>
           <span className="muted">session + cross-session vector memory</span>
         </div>
         {memory && (
@@ -395,7 +409,7 @@ export default function Assistant() {
         <div className="controls">
           <input
             className="grow"
-            placeholder="Recall memory by topic — e.g. 'flame spread rate'"
+            placeholder={t("Recall memory by topic — e.g. 'flame spread rate'")}
             value={memQuery}
             onChange={(e) => setMemQuery(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") loadMemory(memQuery); }}
@@ -407,7 +421,7 @@ export default function Assistant() {
 
         {recalled.length > 0 && (
           <div className="hit">
-            <div className="hittitle">Vector recall</div>
+            <div className="hittitle">{t("Vector recall")}</div>
             <div className="scroll short">
               {recalled.map((m, i) => (
                 <div key={i} className="meta">
@@ -421,7 +435,7 @@ export default function Assistant() {
 
         <div className="grid g2">
           <div>
-            <div className="subhead">Long-term store</div>
+            <div className="subhead">{t("Long-term store")}</div>
             <div className="scroll short">
               {(memory?.recent ?? []).map((m) => (
                 <div key={m.id} className="hit">
@@ -433,12 +447,12 @@ export default function Assistant() {
                 </div>
               ))}
               {(memory?.recent ?? []).length === 0 && (
-                <div className="muted">Empty — ask a question to seed the store.</div>
+                <div className="muted">{t("Empty \u2014 ask a question to seed the store.")}</div>
               )}
             </div>
           </div>
           <div>
-            <div className="subhead">This session</div>
+            <div className="subhead">{t("This session")}</div>
             <div className="scroll short">
               {(memory?.session ?? []).map((m) => (
                 <div key={m.id} className="hit">
@@ -447,7 +461,7 @@ export default function Assistant() {
                 </div>
               ))}
               {(memory?.session ?? []).length === 0 && (
-                <div className="muted">Session memory appears after your first question.</div>
+                <div className="muted">{t("Session memory appears after your first question.")}</div>
               )}
             </div>
           </div>

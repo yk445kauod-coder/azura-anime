@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type Doc = {
   id: number; source_id: string; title: string; kind: string; abstract: string | null;
@@ -11,7 +12,8 @@ const KINDS = [
   "presentation", "workshop_proceedings", "final_report", "other",
 ];
 
-export default function Explorer() {
+export default function Explorer({ focusRef }: { focusRef?: string }) {
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("");
   const [experiment, setExperiment] = useState("");
@@ -52,14 +54,27 @@ export default function Explorer() {
     setDetail(await r.json());
   }
 
+  // Deep link from search: NTRS ids are what the index returns, so look the
+  // document up directly and open its inspector.
+  useEffect(() => {
+    if (!focusRef) return;
+    (async () => {
+      const r = await fetch(`/api/documents?q=${encodeURIComponent(focusRef)}&limit=1`);
+      const d = await r.json();
+      const hit = (d.documents ?? [])[0];
+      if (hit) { setQuery(focusRef); setDocs(d.documents); setTotal(d.total ?? 1); void openDoc(hit.id); }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRef]);
+
   return (
     <div className="grid" style={{ gap: 16 }}>
       <div className="card">
-        <h3>Experiment Explorer <small>search the harvested NASA corpus</small></h3>
+        <h3>{t("Experiment Explorer ")}<small>search the harvested NASA corpus</small></h3>
         <div className="row">
           <input
             style={{ flex: "3 1 320px" }}
-            placeholder="Search titles and full text — e.g. flame spread PMMA, cool flame, smoke detector"
+            placeholder={t("Search titles and full text — e.g. flame spread PMMA, cool flame, smoke detector")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && load()}
@@ -82,7 +97,7 @@ export default function Explorer() {
 
       <div className="grid g2">
         <div className="card">
-          <h3>Results</h3>
+          <h3>{t("Results")}</h3>
           <div className="scroll">
             {docs.map((d) => (
               <div key={d.id} className="hit">
@@ -111,8 +126,8 @@ export default function Explorer() {
         </div>
 
         <div className="card">
-          <h3>Document inspector {detail && <small>NTRS {detail.document.source_id}</small>}</h3>
-          {!detail && <div className="muted">Select a document to inspect its chunks, findings and experiment links.</div>}
+          <h3>Document inspector {detail && <small>{t("NTRS")} {detail.document.source_id}</small>}</h3>
+          {!detail && <div className="muted">{t("Select a document to inspect its chunks, findings and experiment links.")}</div>}
           {detail && (
             <div className="scroll">
               <div style={{ fontWeight: 700, marginBottom: 6 }}>{detail.document.title}</div>
@@ -155,7 +170,7 @@ export default function Explorer() {
                 Extracted findings ({detail.findings.length})
               </h3>
               {detail.findings.length === 0 && (
-                <div className="muted">No metric-bearing statements matched the extraction rules.</div>
+                <div className="muted">{t("No metric-bearing statements matched the extraction rules.")}</div>
               )}
               {detail.findings.slice(0, 25).map((f, i) => (
                 <div key={i} className="hit">

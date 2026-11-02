@@ -19,6 +19,22 @@ export default defineConfig({
       },
     },
   },
+  // `vite preview` serves the built bundle and needs the same proxy as dev,
+  // otherwise /api calls would 404 when checking a production build locally.
+  preview: {
+    port: 12000,
+    host: "0.0.0.0",
+    // The sandbox exposes the dev server through a proxy host, so it must be
+    // allowed explicitly or Vite rejects the request.
+    allowedHosts: true,
+    proxy: {
+      "/api": {
+        target: WORKER,
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api/, ""),
+      },
+    },
+  },
   build: {
     outDir: "dist",
     sourcemap: false,

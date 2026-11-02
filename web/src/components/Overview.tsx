@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type Stats = {
   stats: Record<string, number>;
@@ -36,7 +37,8 @@ type Stats = {
 const fmt = (n?: number) =>
   typeof n === "number" ? n.toLocaleString("en-US") : "—";
 
-export default function Overview() {
+export default function Overview({ onNavigate }: { onNavigate?: (tab: string) => void }) {
+  const { t } = useI18n();
   const [data, setData] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,21 +55,30 @@ export default function Overview() {
   const s = data.stats ?? {};
   const maxYear = Math.max(1, ...data.byYear.map((y) => y.n));
 
+  // Each card links to the view that holds its records, so a headline number is
+  // one click from the evidence behind it.
   const cards = [
-    { k: "Documents", v: fmt(s.documents), s: `${fmt(s.documents_with_fulltext)} with full text` },
-    { k: "Text chunks", v: fmt(s.chunks), s: `${fmt(s.embeddings)} embedded vectors` },
-    { k: "Corpus words", v: fmt(s.corpus_words), s: `${((s.corpus_chars ?? 0) / 1e6).toFixed(1)} M characters` },
-    { k: "Artifacts stored", v: fmt(s.artifact_bytes ? Math.round(s.artifact_bytes / 1e6) : 0) + " MB", s: "PDF + fulltext in Neon S3" },
-    { k: "Experiments", v: fmt(s.experiments), s: "catalogued campaigns" },
-    { k: "Extracted findings", v: fmt(s.findings), s: "metric / value / unit" },
-    { k: "Fire-safety insights", v: fmt(s.insights), s: "evidence-backed" },
+    { k: t("Documents"), v: fmt(s.documents), s: `${fmt(s.documents_with_fulltext)} ${t("with full text")}`, go: "explorer" },
+    { k: t("Text chunks"), v: fmt(s.chunks), s: `${fmt(s.embeddings)} ${t("embedded vectors")}`, go: "explorer" },
+    { k: t("Corpus words"), v: fmt(s.corpus_words), s: `${((s.corpus_chars ?? 0) / 1e6).toFixed(1)} M ${t("characters")}` },
+    { k: t("Artifacts stored"), v: fmt(s.artifact_bytes ? Math.round(s.artifact_bytes / 1e6) : 0) + " MB", s: t("PDF + fulltext in Neon S3") },
+    { k: t("Experiments"), v: fmt(s.experiments), s: t("catalogued campaigns"), go: "experiments" },
+    { k: t("Extracted findings"), v: fmt(s.findings), s: t("metric / value / unit"), go: "data" },
+    { k: t("Fire-safety insights"), v: fmt(s.insights), s: t("evidence-backed"), go: "insights" },
   ];
 
   return (
     <div className="grid" style={{ gap: 18 }}>
       <div className="grid g4">
         {cards.map((c) => (
-          <div className="card metric" key={c.k}>
+          <div
+            className={`card metric${c.go && onNavigate ? " clickable" : ""}`}
+            key={c.k}
+            role={c.go && onNavigate ? "button" : undefined}
+            tabIndex={c.go && onNavigate ? 0 : undefined}
+            onClick={c.go && onNavigate ? () => onNavigate(c.go!) : undefined}
+            onKeyDown={c.go && onNavigate ? (e) => { if (e.key === "Enter") onNavigate(c.go!); } : undefined}
+          >
             <div className="k">{c.k}</div>
             <div className="v">{c.v}</div>
             <div className="s">{c.s}</div>
@@ -78,7 +89,7 @@ export default function Overview() {
       <div className="grid g2">
         <div className="card">
           <h3>
-            Publication timeline <small>documents per year in corpus</small>
+            {t("Publication timeline")} <small>{t("documents per year in corpus")}</small>
           </h3>
           <div className="row" style={{ alignItems: "flex-end", gap: 3, height: 150 }}>
             {data.byYear.map((y) => (
@@ -102,7 +113,7 @@ export default function Overview() {
 
         <div className="card">
           <h3>
-            Document types <small>by classification</small>
+            {t("Document types")} <small>{t("by classification")}</small>
           </h3>
           <table>
             <tbody>
@@ -122,16 +133,16 @@ export default function Overview() {
 
       <div className="card">
         <h3>
-          Highest-quality documents <small>ranked by corpus usefulness score</small>
+          {t("Highest-quality documents")} <small>{t("ranked by corpus usefulness score")}</small>
         </h3>
         <div className="scroll">
           <table>
             <thead>
               <tr>
-                <th>Title</th><th>Type</th><th>Year</th>
-                <th style={{ textAlign: "right" }}>Words</th>
-                <th style={{ textAlign: "right" }}>Chunks</th>
-                <th style={{ textAlign: "right" }}>Quality</th>
+                <th>{t("Title")}</th><th>{t("Type")}</th><th>{t("Year")}</th>
+                <th style={{ textAlign: "right" }}>{t("Words")}</th>
+                <th style={{ textAlign: "right" }}>{t("Chunks")}</th>
+                <th style={{ textAlign: "right" }}>{t("Quality")}</th>
               </tr>
             </thead>
             <tbody>
@@ -159,12 +170,12 @@ export default function Overview() {
       <div className="grid g2">
         <div className="card">
           <h3>
-            Extracted quantitative findings <small>regex-extracted metrics</small>
+            {t("Extracted quantitative findings")} <small>{t("regex-extracted metrics")}</small>
           </h3>
           <div className="scroll">
             <table>
               <thead>
-                <tr><th>Metric</th><th style={{ textAlign: "right" }}>n</th>
+                <tr><th>{t("Metric")}</th><th style={{ textAlign: "right" }}>n</th>
                 <th style={{ textAlign: "right" }}>min</th><th style={{ textAlign: "right" }}>max</th><th>unit</th></tr>
               </thead>
               <tbody>
@@ -187,12 +198,12 @@ export default function Overview() {
 
         <div className="card">
           <h3>
-            Pipeline activity <small>collection → cleaning → indexing → analysis</small>
+            {t("Pipeline activity")} <small>{t("collection → cleaning → indexing → analysis")}</small>
           </h3>
           <div className="scroll">
             <table>
               <thead>
-                <tr><th>Stage</th><th>Status</th><th style={{ textAlign: "right" }}>In</th>
+                <tr><th>{t("Stage")}</th><th>{t("Status")}</th><th style={{ textAlign: "right" }}>In</th>
                 <th style={{ textAlign: "right" }}>Out</th><th style={{ textAlign: "right" }}>MB</th></tr>
               </thead>
               <tbody>

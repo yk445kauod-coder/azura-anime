@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type CompareResult = {
   experiments: Record<string, unknown>[];
@@ -17,6 +18,7 @@ const LABELS: Record<string, string> = {
 };
 
 export default function Compare() {
+  const { t } = useI18n();
   const [available, setAvailable] = useState<{ code: string; name: string }[]>([]);
   const [chosen, setChosen] = useState<string[]>([]);
   const [topic, setTopic] = useState("");
@@ -60,11 +62,11 @@ export default function Compare() {
   return (
     <div className="grid" style={{ gap: 16 }}>
       <div className="card">
-        <h3>Comparative Analysis <small>conditions and results side by side</small></h3>
+        <h3>{t("Comparative Analysis ")}<small>conditions and results side by side</small></h3>
         <div className="row" style={{ marginBottom: 11 }}>
           <input
             style={{ flex: "2 1 260px" }}
-            placeholder="Optional metric filter — e.g. flame spread rate, extinction time"
+            placeholder={t("Optional metric filter — e.g. flame spread rate, extinction time")}
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
           />
@@ -95,12 +97,12 @@ export default function Compare() {
       {result && (
         <>
           <div className="card">
-            <h3>Condition matrix</h3>
+            <h3>{t("Condition matrix")}</h3>
             <div style={{ overflowX: "auto" }}>
               <table>
                 <thead>
                   <tr>
-                    <th>Dimension</th>
+                    <th>{t("Dimension")}</th>
                     {result.experiments.map((e) => (
                       <th key={String(e.code)}>{String(e.code)}</th>
                     ))}
@@ -120,7 +122,7 @@ export default function Compare() {
                     </tr>
                   ))}
                   <tr>
-                    <td style={{ color: "var(--muted)" }}>Objective</td>
+                    <td style={{ color: "var(--muted)" }}>{t("Objective")}</td>
                     {result.experiments.map((e) => (
                       <td key={String(e.code) + "obj"} style={{ fontSize: 11.6 }}>
                         {String(e.objective ?? "—")}
@@ -141,7 +143,7 @@ export default function Compare() {
               <table>
                 <thead>
                   <tr>
-                    <th>Metric</th>
+                    <th>{t("Metric")}</th>
                     {result.experiments.map((e) => <th key={String(e.code)}>{String(e.code)}</th>)}
                   </tr>
                 </thead>
@@ -192,7 +194,7 @@ export default function Compare() {
                     </div>
                   ))}
                   {(result.findings[String(e.id)] ?? []).length === 0 && (
-                    <div className="muted">No numeric findings extracted for this campaign.</div>
+                    <div className="muted">{t("No numeric findings extracted for this campaign.")}</div>
                   )}
                 </div>
               </div>

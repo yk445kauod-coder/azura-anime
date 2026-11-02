@@ -17,6 +17,9 @@
  *   - LLM:   ignis-gateway Cloudflare Worker (chat-completions dialect)
  */
 import { neon } from "@neondatabase/serverless";
+import { markdownToPdf, markdownToDocx, safeFilename, type ChartSpec } from "./export";
+import { renderSvg } from "./viz";
+import { runAgentLoop } from "./agentic";
 
 interface Env {
   AI: any;
@@ -26,6 +29,8 @@ interface Env {
   NEON_DATABASE_URL?: string;
   EMBED_MODEL: string;
   DB_EMBED_MODEL: string;
+  IGNIS_DEEP_MODEL?: string;
+  IGNIS_FAST_MODEL?: string;
 }
 
 /** Call the gateway worker via its Service Binding (bypasses *.workers.dev 1042). */
@@ -228,17 +233,33 @@ async function retrieveGraded(env: Env, question: string, k: number): Promise<Hi
   return hits;
 }
 
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
 async function llmComplete(env: Env, system: string, user: string, model: string,
                            jsonMode = false, maxTokens = 700,
                            effort = "low", timeoutMs = 75000): Promise<string> {
+  const messages: ChatMessage[] = [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+  return llmChat(env, messages, model, { jsonMode, maxTokens, effort, timeoutMs });
+}
+
+type ChatOpts = { jsonMode?: boolean; maxTokens?: number; effort?: string; timeoutMs?: number };
+
+/**
+ * One chat completion over an arbitrary message list.
+ *
+ * The agentic loop needs the model to see its own prior tool calls and their
+ * results, which a single system+user pair cannot express.
+ */
+async function llmChat(env: Env, messages: ChatMessage[], model: string, opts: ChatOpts = {}): Promise<string> {
+  const { jsonMode = false, maxTokens = 700, effort = "low", timeoutMs = 75000 } = opts;
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (env.IGNIS_PROXY_TOKEN) headers["authorization"] = `Bearer ${env.IGNIS_PROXY_TOKEN}`;
   const payload: any = {
     model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
+    messages,
     stream: false,
     max_tokens: maxTokens,
     reasoning_effort: effort,
@@ -649,10 +670,37 @@ async function runAgent(
     if (written) step("memory_write", { n_claims: written });
   } catch { /* best-effort */ }
 
-  return {
+  // Attach a chart when the question asks to see one. The figure is built from
+  // recorded measurements only, and the answer carries a markdown chart
+  // reference so exporting the answer embeds the same figure.
+  let chart: any = null;
+  let answer = synth.answer;
+  const evidenceText = relevant.map((h) => h.text ?? "").join(" ").slice(0, 4000);
+  const datasetKey = pickDataset(question, evidenceText);
+  if (datasetKey && wantsVisual(question)) {
+    try {
+      const built = await buildChart(env, { dataset: datasetKey, type: "bar", limit: 20 });
+      if (!("error" in built)) {
+        chart = {
+          spec: built.spec,
+          svg: renderSvg(built.spec),
+          rows: built.rows,
+          note: "Values are measurements mined from NTRS report text, not a curated NASA dataset.",
+        };
+        // `chart:0` is the export syntax for "the first attached chart".
+        answer = `${answer}\n\n![${built.spec.title}](chart:0)`;
+        step("visualize", { dataset: datasetKey, type: built.spec.type, points: built.rows.length });
+      }
+    } catch (err: any) {
+      console.error(`visualize: ${String(err?.message ?? err).slice(0, 200)}`);
+    }
+  }
+
+  const result = {
     run_id: runId,
     question,
-    answer: synth.answer,
+    answer,
+    chart,
     claims: verified.claims,
     evidence: relevant.map((h) => ({ ...h })),
     sub_questions: subs,
@@ -664,6 +712,642 @@ async function runAgent(
     trace,
     latency_ms: Date.now() - started,
   };
+
+  // Session history is written only for a real, caller-supplied conversation.
+  // Without one this stays a stateless run, so an anonymous visitor never
+  // accumulates rows in the database.
+  if (conversationId) {
+    try {
+      await persistSession(env, conversationId, question, result);
+    } catch (err: any) {
+      console.error(`session persist: ${String(err?.message ?? err).slice(0, 200)}`);
+    }
+  }
+
+  return result;
+}
+
+/** Dataset key -> the words that indicate a question is about it. */
+const DATASET_INTENT: Record<string, string[]> = {
+  flame_temperature: ["temperature", "thermal", "kelvin", "حرارة", "درجة الحرارة"],
+  flame_spread_rate: ["spread", "propagat", "انتشار", "معدل الانتشار"],
+  limiting_oxygen_index: ["oxygen", "lox", "oxidizer", "أكسجين", "الاكسجين"],
+  pressure: ["pressure", "kpa", "ضغط"],
+  soot_volume_fraction: ["soot", "sooting", "سoot", "سخام", "هباب"],
+  smoke_particle_size: ["smoke", "particle", "aerosol", "دخان", "جزيئات"],
+  gravity_level: ["gravity", "microgravity", "g-level", "جاذبية"],
+};
+
+/**
+ * Pick the dataset a question is most likely asking to see.
+ *
+ * Chosen by keyword overlap with the question, then the retrieved evidence, so
+ * the chart is tied to what was actually asked and cited rather than to a
+ * default the model invented.
+ */
+function pickDataset(question: string, evidenceText = ""): string | null {
+  const hay = `${question} ${evidenceText}`.toLowerCase();
+  let best: { key: string; score: number } | null = null;
+  for (const [key, words] of Object.entries(DATASET_INTENT)) {
+    let score = 0;
+    for (const w of words) {
+      const hits = hay.split(w.toLowerCase()).length - 1;
+      if (hits) score += hits * (question.toLowerCase().includes(w.toLowerCase()) ? 3 : 1);
+    }
+    if (score && (!best || score > best.score)) best = { key, score };
+  }
+  return best?.key ?? null;
+}
+
+/** True when the question is asking for a visual rather than prose. */
+function wantsVisual(question: string): boolean {
+  const q = question.toLowerCase();
+  return /\b(chart|graph|plot|visuali[sz]|diagram|figure|compare.*numerically|distribution)\b/.test(q)
+    || /(رسم|مخطط|بياني|رسم بياني|توضيح|مقارنة)/.test(question);
+}
+
+type ChartRequest = {
+  dataset: string;
+  type?: "bar" | "line" | "scatter";
+  limit?: number;
+  group_by?: "experiment";
+  title?: string;
+};
+
+/**
+ * Build a chart spec and its data straight from `ignis.dataset_row`.
+ *
+ * Every plotted value is a measurement recorded in a NTRS report; this function
+ * never synthesises points, so a chart cannot show numbers that are not in the
+ * evidence base.
+ */
+async function buildChart(env: Env, req: ChartRequest): Promise<{ spec: ChartSpec; rows: any[]; meta: any } | { error: string }> {
+  const sql = db(env);
+  const limit = Math.min(Math.max(Number(req.limit ?? 20), 2), 60);
+  const meta: any[] = await sql`SELECT * FROM ignis.dataset WHERE key = ${req.dataset} LIMIT 1`;
+  if (!meta.length) return { error: `dataset ${req.dataset} not found` };
+  const unit = meta[0].canonical_unit ?? "";
+
+  let rows: any[];
+  if (req.group_by === "experiment") {
+    rows = await sql`
+      SELECT coalesce(experiment_code, 'unlinked') AS label,
+             count(*)::int AS n,
+             round(avg(value)::numeric, 4) AS value
+        FROM ignis.dataset_row
+       WHERE dataset_key = ${req.dataset}
+       GROUP BY 1 ORDER BY value DESC LIMIT ${limit}`;
+  } else {
+    rows = await sql`
+      SELECT coalesce(experiment_code, document_source_id, 'recorded') AS label, value
+        FROM ignis.dataset_row
+       WHERE dataset_key = ${req.dataset}
+       ORDER BY value LIMIT ${limit}`;
+  }
+  if (!rows.length) return { error: `dataset ${req.dataset} has no rows` };
+
+  const type = (req.type ?? "bar") as ChartSpec["type"];
+  const spec: ChartSpec = {
+    type,
+    title: req.title ?? `${meta[0].name}${req.group_by === "experiment" ? " by experiment" : ""}`,
+    x_label: req.group_by === "experiment" ? "experiment" : "measurement (ordered by value)",
+    y_label: meta[0].name,
+    unit,
+    series: [{
+      label: meta[0].name,
+      points: rows.map((r, i) => ({ x: type === "bar" ? String(r.label) : i + 1, y: Number(r.value) })),
+    }],
+    source_note: `${rows.length} recorded values from NASA NTRS reports · extracted by regex · unit ${unit || "n/a"}`,
+  };
+  return { spec, rows, meta: meta[0] };
+}
+
+/** Plottable metrics with their value counts, for the agent's build_chart tool. */
+async function listDatasets(env: Env): Promise<{ key: string; name: string; unit: string; n: number }[]> {
+  const sql = db(env);
+  const rows: any[] = await sql`
+    SELECT key, name, canonical_unit, value_count FROM ignis.dataset
+     WHERE value_count > 0 ORDER BY value_count DESC, name`;
+  return rows.map((r) => ({ key: r.key, name: r.name, unit: r.canonical_unit ?? "", n: Number(r.value_count ?? 0) }));
+}
+
+/**
+ * Side-by-side comparison of named experiments.
+ *
+ * Shared by the /compare endpoint and the agent's compare_experiments tool so a
+ * chart or an answer can never disagree with what the Compare view shows.
+ */
+async function compareExperiments(env: Env, codes: string[], topic: string | null): Promise<any> {
+  const sql = db(env);
+  const exps = await sql`SELECT e.*, f.code AS facility_code, f.name AS facility_name, f.platform FROM ignis.experiment e LEFT JOIN ignis.facility f ON f.id = e.facility_id WHERE e.code = ANY(${codes})`;
+  if (!exps.length) return { experiments: [], dimensions: [], findings: {}, metric_matrix: [], note: "no matching experiments" };
+  const ids = exps.map((e: any) => e.id);
+  const findings = await sql`SELECT ed.experiment_id, f.metric, f.value, f.value_max, f.unit, f.statement, f.confidence, d.title, d.source_id FROM ignis.finding f JOIN ignis.experiment_document ed ON ed.document_id = f.document_id JOIN ignis.document d ON d.id = f.document_id WHERE ed.experiment_id = ANY(${ids}) AND (${topic}::text IS NULL OR f.metric ILIKE '%' || ${topic}::text || '%') ORDER BY ed.experiment_id, f.metric`;
+  const docCounts = await sql`SELECT experiment_id, count(*) AS n FROM ignis.experiment_document WHERE experiment_id = ANY(${ids}) GROUP BY experiment_id`;
+  const counts = new Map(docCounts.map((r: any) => [r.experiment_id, Number(r.n)]));
+  const byExp: Record<string, any[]> = {};
+  for (const f of findings as any[]) {
+    (byExp[f.experiment_id] ??= []).push({
+      metric: f.metric, value: f.value, value_max: f.value_max, unit: f.unit,
+      statement: f.statement, confidence: f.confidence, document_title: f.title, source_id: f.source_id,
+    });
+  }
+  const metricMatrix: Record<string, any> = {};
+  for (const e of exps as any[]) for (const f of byExp[e.id] ?? []) {
+    (metricMatrix[f.metric] ??= {})[e.id] ??= [];
+    metricMatrix[f.metric][e.id].push({ value: f.value, value_max: f.value_max, unit: f.unit });
+  }
+  return {
+    experiments: (exps as any[]).map((e) => ({
+      id: e.id, code: e.code, name: e.name, campaign: e.campaign, facility: e.facility_code,
+      facility_name: e.facility_name, platform: e.platform, status: e.status, gravity_level: e.gravity_level,
+      fuel_type: e.fuel_type, ambient_gas: e.ambient_gas, pressure_kpa: e.pressure_kpa, o2_fraction: e.o2_fraction,
+      ignition_source: e.ignition_source, objective: e.objective, summary: e.summary,
+      document_count: counts.get(e.id) ?? 0,
+    })),
+    dimensions: ["campaign", "facility_code", "platform", "status", "gravity_level", "fuel_type", "ambient_gas", "pressure_kpa", "o2_fraction", "ignition_source"],
+    findings: Object.fromEntries((exps as any[]).map((e) => [String(e.id), byExp[e.id] ?? []])),
+    metric_matrix: Object.entries(metricMatrix).sort(([a], [b]) => a.localeCompare(b)).map(([metric, values]) => ({ metric, values })),
+  };
+}
+
+/** Experiment codes known to the corpus, for the agent's compare tool. */
+async function knownExperimentCodes(env: Env): Promise<string[]> {
+  const sql = db(env);
+  const rows: any[] = await sql`SELECT code FROM ignis.experiment WHERE code IS NOT NULL ORDER BY code`;
+  return rows.map((r) => String(r.code));
+}
+
+/**
+ * Run the agentic loop against the live corpus.
+ *
+ * Astra is the default reasoning core because the loop multiplies model quality:
+ * each turn is a real decision about what to search next, and citation
+ * discipline is only as good as the model making it.
+ */
+async function runAgentic(
+  env: Env,
+  question: string,
+  mode: "fast" | "deep",
+  model: string | undefined,
+  k: number,
+  emit: (node: string, data: any) => void,
+  conversationId?: string,
+): Promise<any> {
+  const started = Date.now();
+  const runId = crypto.randomUUID();
+  const trace: any[] = [];
+  const step = (node: string, data: any) => {
+    trace.push({ node, ...data, t_ms: Date.now() - started });
+    emit(node, data);
+  };
+
+  const usedModel = model || env.IGNIS_DEEP_MODEL || "gpt-6-astra";
+  const maxIterations = mode === "deep" ? 8 : 5;
+  const deadlineMs = mode === "deep" ? 210000 : 150000;
+
+  step("mode", { mode, use_llm: true, provider: "ignis-agent", agent: "react-loop", model: usedModel, max_iterations: maxIterations });
+
+  // The model can recall memory as a tool, but a cheap pre-pass puts prior
+  // findings in context on turn one so it rarely has to spend a turn asking.
+  let memoryBlock = "";
+  try {
+    const recalled = await memoryRecall(env, question, 5, conversationId);
+    if (recalled.length) {
+      memoryBlock = "\n\nPrior findings from earlier sessions (may or may not apply):\n" +
+        recalled.map((r: any, i: number) => `(${i + 1}) ${r.content}`).join("\n");
+      step("memory", { n_recalled: recalled.length, contents: recalled.map((r: any) => r.content) });
+    }
+  } catch { /* memory is best-effort */ }
+
+  const known = await knownExperimentCodes(env).catch(() => [] as string[]);
+
+  const loop = await runAgentLoop(
+    question + memoryBlock,
+    {
+      model: usedModel,
+      deadlineMs,
+      maxIterations,
+      search: (q, kk) => retrieveGraded(env, q, kk),
+      recall: async (q, kk) => (await memoryRecall(env, q, kk, conversationId)) as any,
+      compare: (codes, topic) => compareExperiments(env, codes, topic),
+      datasets: () => listDatasets(env),
+      chat: (messages, opts) => llmChat(env, messages, usedModel, opts),
+    },
+    known,
+    (s) => step(s.tool === "final_answer" ? "final" : "act", {
+      iteration: s.iteration, thought: s.thought, tool: s.tool, input: s.input,
+      n_evidence: s.n_evidence, error: s.error,
+    }),
+  );
+
+  // The loop numbered evidence in this same order, so the [n] markers the model
+  // wrote resolve to the passages shown beside the answer.
+  const relevant = loop.hits;
+  const hitsByChunk = new Map(relevant.map((h) => [h.chunk_id, h]));
+  const claims = verifyClaims(claimsFromCitations(loop.answer, relevant as any), hitsByChunk);
+  const verifiedRatio = claims.ratio;
+
+  let chart: any = null;
+  let answer = loop.answer;
+  if (loop.chartRequest) {
+    try {
+      const built = await buildChart(env, {
+        dataset: loop.chartRequest.dataset,
+        type: loop.chartRequest.type,
+        limit: 20,
+        group_by: "experiment",
+      });
+      if ("error" in built) {
+        step("visualize", { error: built.error });
+      } else {
+        chart = {
+          spec: built.spec,
+          svg: renderSvg(built.spec),
+          rows: built.rows,
+          note: "Values are measurements mined from NTRS report text, not a curated NASA dataset.",
+        };
+        answer = `${answer}\n\n![${built.spec.title}](chart:0)`;
+        step("visualize", { dataset: loop.chartRequest.dataset, type: built.spec.type, points: built.rows.length });
+      }
+    } catch (err: any) {
+      step("visualize", { error: String(err?.message ?? err).slice(0, 160) });
+    }
+  }
+
+  step("verify", { verified_ratio: Number(verifiedRatio.toFixed(3)), claims: claims.claims.length, stop_reason: loop.stopReason });
+  step("synthesize", { provider: "ignis-agent", model: usedModel, claims: claims.claims.length, iterations: loop.iterations });
+
+  try {
+    const written = await memoryWrite(env, question, claims.claims, conversationId);
+    if (written) step("memory_write", { n_claims: written });
+  } catch { /* best-effort */ }
+
+  // Confidence blends the model's own stopping quality with how many claims the
+  // corpus actually supports; the verified share dominates because it is measured.
+  const modelConfidence = loop.stopReason === "final_answer" ? 0.7 : 0.3;
+  const confidence = Math.round(Math.min(0.95, 0.45 * modelConfidence + 0.55 * verifiedRatio) * 1000) / 1000;
+
+  const result = {
+    run_id: runId,
+    question,
+    answer,
+    chart,
+    claims: claims.claims,
+    evidence: relevant.map((h) => ({ ...h })),
+    sub_questions: loop.steps.filter((s) => s.tool === "search_corpus")
+      .map((s) => String(s.input?.query ?? "")).filter(Boolean),
+    confidence,
+    grounded: Boolean(claims.claims.length) && verifiedRatio > 0.3,
+    iterations: loop.iterations,
+    stop_reason: loop.stopReason,
+    provider: "ignis-agent",
+    model: usedModel,
+    agent: "react-loop",
+    trace,
+    latency_ms: Date.now() - started,
+  };
+
+  if (conversationId) {
+    try {
+      await persistSession(env, conversationId, question, result);
+    } catch (err: any) {
+      console.error(`session persist: ${String(err?.message ?? err).slice(0, 200)}`);
+    }
+  }
+
+  return result;
+}
+
+/** The 10 UI locales IGNIS ships. English is the source, so it needs no calls. */
+const LOCALES: { code: string; name: string; english: string; rtl?: boolean }[] = [
+  { code: "en", name: "English", english: "English" },
+  { code: "ar", name: "العربية", english: "Arabic", rtl: true },
+  { code: "fr", name: "Français", english: "French" },
+  { code: "es", name: "Español", english: "Spanish" },
+  { code: "de", name: "Deutsch", english: "German" },
+  { code: "pt", name: "Português", english: "Portuguese" },
+  { code: "ru", name: "Русский", english: "Russian" },
+  { code: "zh", name: "中文", english: "Chinese (Simplified)" },
+  { code: "ja", name: "日本語", english: "Japanese" },
+  { code: "hi", name: "हिन्दी", english: "Hindi" },
+];
+
+/** Locale codes the translate endpoint will accept. */
+const LOCALE_CODES = new Set(LOCALES.map((l) => l.code));
+
+const TRANSLATE_SYSTEM =
+  "You are a UI localisation engine for a NASA microgravity-combustion research dashboard. " +
+  "Translate each English UI string into the target language, one per line. " +
+  "Keep it short: these are buttons, headings, labels, and status lines. " +
+  "Preserve placeholders, numbers, units (K, kPa, cm/s, %, ppm, nm), and acronyms " +
+  "(NASA, NTRS, SAFFIRE, BASS-II, SAME, PDF, DOCX, AI, RAG) exactly as written. " +
+  "Do not translate proper nouns. Do not add punctuation that is not implied. " +
+  'Reply with JSON only: {"t": ["<translation 1>", "<translation 2>", ...]} with exactly one ' +
+  "item per input string, in input order. Never omit an item and never merge two inputs into one.";
+
+async function md5Hex(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest("MD5", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const HTML_ENTITIES: Record<string, string> = {
+  "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&apos;": "'", "&nbsp;": " ",
+};
+const unescapeEntities = (s: string) =>
+  s.replace(/&(?:amp|lt|gt|quot|#39|apos|nbsp);/g, (m) => HTML_ENTITIES[m] ?? m);
+
+/**
+ * Google's public translate endpoint.
+ *
+ * Strings are joined with newlines into a single `q`, which the endpoint splits
+ * back into one segment per line — so a whole batch costs one request. Segments
+ * are only trusted when the count matches, because a mismatch would silently
+ * pair a translation with the wrong source string.
+ */
+async function googleTranslate(texts: string[], locale: string): Promise<(string | null)[]> {
+  const url = "https://translate.googleapis.com/translate_a/single?" + new URLSearchParams({
+    client: "gtx", sl: "en", tl: locale, dt: "t", q: texts.join("\n"),
+  });
+  // The endpoint throttles bursts with 429; a short backoff clears it.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; IGNIS/1.0)", Accept: "application/json" },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (res.status === 429 || res.status >= 500) {
+      if (attempt < 2) { await new Promise((r) => setTimeout(r, 400 * (attempt + 1))); continue; }
+      throw new Error(`google ${res.status}`);
+    }
+    if (!res.ok) throw new Error(`google ${res.status}`);
+    const data: any = await res.json();
+    const segs: string[] = (data?.[0] ?? [])
+      .map((s: any) => (Array.isArray(s) ? s[0] : null))
+      .filter((s: any) => typeof s === "string");
+    const joined = unescapeEntities(segs.join("")).split("\n").map((s) => s.trim());
+    if (joined.length !== texts.length) {
+      throw new Error(`google alignment ${joined.length} != ${texts.length}`);
+    }
+    return joined.map((s, i) => (s && s !== texts[i] ? s : null));
+  }
+  throw new Error("google unreachable");
+}
+
+/**
+ * MyMemory: free, per-string, no key. Only used for strings Google could not
+ * resolve, and capped, because each string costs its own subrequest.
+ */
+async function myMemoryTranslate(texts: string[], locale: string): Promise<(string | null)[]> {
+  const out: (string | null)[] = [];
+  for (const t of texts) {
+    // The endpoint rejects `q` longer than 500 bytes.
+    if (t.length > 480) { out.push(null); continue; }
+    try {
+      const url = "https://api.mymemory.translated.net/get?" +
+        new URLSearchParams({ q: t, langpair: `en|${locale}` });
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) { out.push(null); continue; }
+      const d: any = await res.json();
+      const v = d?.responseData?.translatedText;
+      if (typeof v !== "string" || !v.trim()) { out.push(null); continue; }
+      const decoded = unescapeEntities(v);
+      // MyMemory echoes the input when it has no translation for the pair.
+      out.push(decoded === t ? null : decoded);
+    } catch {
+      out.push(null);
+    }
+  }
+  return out;
+}
+
+/**
+ * Ask the model for translations of one batch.
+ *
+ * Returns a string per input, or null when the response cannot be trusted. A
+ * response with the wrong item count is rejected outright: a short array would
+ * silently shift every later string onto the wrong source, which shows up as
+ * plausible-looking but wrong UI text.
+ */
+async function translateBatch(env: Env, locale: string, batch: string[]): Promise<(string | null)[]> {
+  const language = LOCALES.find((l) => l.code === locale)?.english ?? locale;
+  const numbered = batch.map((s, n) => `${n + 1}. ${s}`).join("\n");
+  for (const budget of [1500, 3000]) {
+    try {
+      const raw = await llmComplete(
+        env, TRANSLATE_SYSTEM,
+        `Target language: ${language}\n\n${numbered}`,
+        env.IGNIS_FAST_MODEL || "gpt-5.6-sol", true, budget, "low", 60000,
+      );
+      const parsed = parseJsonObject(raw);
+      const arr = Array.isArray(parsed?.t) ? parsed.t : null;
+      if (arr && arr.length === batch.length) {
+        return arr.map((v: any, i: number) =>
+          typeof v === "string" && v.trim() && v.trim() !== batch[i] ? v.trim() : null);
+      }
+      console.error(`translate ${locale}: bad item count ${arr?.length ?? "n/a"} for ${batch.length} inputs`);
+    } catch (err: any) {
+      console.error(`translate ${locale}: ${String(err?.message ?? err).slice(0, 160)}`);
+    }
+  }
+  return batch.map(() => null);
+}
+
+// Google accepts roughly 8 KB of query string; 60 short labels stays well under.
+const GOOGLE_CHUNK = 60;
+// Each MyMemory string is one subrequest, and a Worker invocation gets 50.
+const MYMEMORY_MAX = 12;
+
+/**
+ * Resolve a set of strings through the provider chain, cheapest first.
+ *
+ * Google and MyMemory are machine-translation services, so they are fast and
+ * deterministic for short UI labels; the gateway model covers whatever they
+ * cannot. Every provider returns one slot per input so the caller can keep
+ * position, and unresolved slots come back as null rather than English — that
+ * distinction is what stops a failure from being cached as a translation.
+ */
+async function translateViaProviders(env: Env, locale: string, batch: string[]): Promise<(string | null)[]> {
+  const resolved: (string | null)[] = batch.map(() => null);
+
+  for (let i = 0; i < batch.length; i += GOOGLE_CHUNK) {
+    const slice = batch.slice(i, i + GOOGLE_CHUNK);
+    try {
+      const part = await googleTranslate(slice, locale);
+      part.forEach((v, n) => { if (v) resolved[i + n] = v; });
+    } catch (err: any) {
+      console.error(`translate ${locale}: google failed ${String(err?.message ?? err).slice(0, 120)}`);
+    }
+  }
+
+  const googleMisses = batch.map((s, i) => (resolved[i] ? -1 : i)).filter((i) => i >= 0);
+  if (googleMisses.length) {
+    const slice = googleMisses.slice(0, MYMEMORY_MAX).map((i) => batch[i]);
+    try {
+      const part = await myMemoryTranslate(slice, locale);
+      part.forEach((v, n) => { if (v) resolved[googleMisses[n]] = v; });
+    } catch (err: any) {
+      console.error(`translate ${locale}: mymemory failed ${String(err?.message ?? err).slice(0, 120)}`);
+    }
+  }
+
+  const llmMisses = batch.map((s, i) => (resolved[i] ? -1 : i)).filter((i) => i >= 0);
+  if (llmMisses.length) {
+    const part = await translateBatch(env, locale, llmMisses.map((i) => batch[i]));
+    part.forEach((v, n) => { if (v) resolved[llmMisses[n]] = v; });
+  }
+
+  return resolved;
+}
+
+/**
+ * Translate UI strings into a locale, cached in `ignis.ui_translation`.
+ *
+ * Only cache misses reach the model, so the 10 locales cost one batch call each
+ * per string rather than one per page view. Batches that come back malformed are
+ * halved and retried, which isolates one problematic string instead of losing
+ * the whole page to English.
+ */
+async function translateStrings(env: Env, locale: string, strings: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const unique = [...new Set(strings.map((s) => String(s ?? "")).filter((s) => s.trim()))];
+  if (!unique.length) return out;
+
+  // English is the source language: return it verbatim and skip the model.
+  if (locale === "en") {
+    for (const s of unique) out[s] = s;
+    return out;
+  }
+
+  const sql = db(env);
+  const hashes = await Promise.all(unique.map(md5Hex));
+  const hashOf = new Map(unique.map((s, i) => [s, hashes[i]]));
+
+  const cached: any[] = await sql`
+    SELECT source_hash, translated FROM ignis.ui_translation
+     WHERE locale = ${locale} AND source_hash = ANY(${hashes})`;
+  const byHash = new Map(unique.map((s, i) => [hashes[i], s]));
+  for (const row of cached) {
+    const src = byHash.get(row.source_hash);
+    if (src) out[src] = row.translated;
+  }
+
+  const missing = unique.filter((s) => !(s in out));
+  if (!missing.length) return out;
+
+  // One pass: every provider in the chain sees the whole set, so the number of
+  // subrequests stays fixed regardless of how many strings fail to align.
+  const resolved = new Map<string, string>();
+  const result = await translateViaProviders(env, locale, missing);
+  missing.forEach((s, i) => {
+    const v = result[i];
+    if (v) resolved.set(s, v);
+  });
+
+  const rows: { hash: string; source: string; translated: string }[] = [];
+  for (const [src, translated] of resolved) {
+    out[src] = translated;
+    rows.push({ hash: hashOf.get(src)!, source: src, translated });
+  }
+  // Unresolved strings are deliberately left out of both the response map and
+  // the cache: the client falls back to English, and the next request retries
+  // instead of serving a permanent English placeholder.
+  const unresolved = missing.filter((s) => !resolved.has(s));
+  if (unresolved.length) {
+    console.error(`translate ${locale}: ${unresolved.length}/${missing.length} unresolved, not cached`);
+  }
+  if (rows.length) {
+    // One statement per batch via UNNEST: the driver is a tagged-template client,
+    // so a per-row INSERT would mean one round trip per string.
+    try {
+      await sql`
+        INSERT INTO ignis.ui_translation (locale, source_hash, source_en, translated)
+        SELECT ${locale}, h, s, tr
+          FROM unnest(${rows.map((r) => r.hash)}::text[],
+                      ${rows.map((r) => r.source)}::text[],
+                      ${rows.map((r) => r.translated)}::text[]) AS x(h, s, tr)
+        ON CONFLICT (locale, source_hash) DO NOTHING`;
+    } catch (err: any) {
+      console.error(`translate cache write: ${String(err?.message ?? err).slice(0, 300)}`);
+    }
+  }
+  return out;
+}
+
+/** The tools the agent reports using on each turn, for the session transcript. */
+const SESSION_TOOLS = ["memory_recall", "hybrid_retrieve", "grade_evidence", "synthesize", "verify",
+  "search_corpus", "compare_experiments", "build_chart", "final_answer", "act", "final", "visualize"];
+
+/**
+ * Record one question/answer turn and its agent steps against a conversation.
+ *
+ * Everything here is derived from a run that already happened; nothing is
+ * invented for the transcript.
+ */
+async function persistSession(env: Env, conversationId: string, question: string, result: any): Promise<void> {
+  const sql = db(env);
+  const runId = String(result.run_id);
+  await sql`INSERT INTO ignis.conversation (id, title, mode)
+            VALUES (${conversationId}::uuid, ${question.slice(0, 120)}, 'agent')
+            ON CONFLICT (id) DO UPDATE SET updated_at = now()`;
+  await sql`INSERT INTO ignis.message (conversation_id, role, content)
+            VALUES (${conversationId}::uuid, 'user', ${question})`;
+  await sql`INSERT INTO ignis.message (conversation_id, role, content, token_count, latency_ms)
+            VALUES (${conversationId}::uuid, 'assistant', ${String(result.answer ?? "")},
+                    ${Number(result.total_tokens ?? 0) || null}, ${Number(result.latency_ms ?? 0)})`;
+  await sql`INSERT INTO ignis.agent_run (id, conversation_id, question, plan, iterations, status, answer,
+                                         answer_confidence, latency_ms, finished_at)
+            VALUES (${runId}::uuid, ${conversationId}::uuid, ${question},
+                    ${JSON.stringify({ sub_questions: result.sub_questions ?? [] })}::jsonb,
+                    1, 'completed', ${String(result.answer ?? "")},
+                    ${Number(result.confidence ?? 0)}, ${Number(result.latency_ms ?? 0)}, now())
+            ON CONFLICT (id) DO NOTHING`;
+  const steps: any[] = Array.isArray(result.trace) ? result.trace : [];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    await sql`INSERT INTO ignis.agent_step (run_id, step_index, node, thought, tool, tool_input, latency_ms)
+              VALUES (${runId}::uuid, ${i}, ${String(s.node ?? "step")},
+                      ${s.verdict ? String(s.verdict) : null},
+                      ${SESSION_TOOLS.includes(String(s.node)) ? String(s.node) : null},
+                      ${JSON.stringify(s)}::jsonb, ${Number(s.t_ms ?? 0)})`;
+  }
+  await sql`UPDATE ignis.conversation SET updated_at = now() WHERE id = ${conversationId}::uuid`;
+}
+
+/** List conversations that actually hold a transcript. */
+async function listSessions(env: Env): Promise<any[]> {
+  const sql = db(env);
+  return await sql`
+    SELECT c.id, c.title, c.mode, c.created_at, c.updated_at,
+           (SELECT count(*)::int FROM ignis.message m WHERE m.conversation_id = c.id) AS turns,
+           (SELECT count(*)::int FROM ignis.agent_run r WHERE r.conversation_id = c.id) AS runs,
+           (SELECT left(m.content, 160) FROM ignis.message m
+             WHERE m.conversation_id = c.id AND m.role = 'ASSISTANT'
+             ORDER BY m.id DESC LIMIT 1) AS last_answer
+      FROM ignis.conversation c
+     WHERE EXISTS (SELECT 1 FROM ignis.message m WHERE m.conversation_id = c.id)
+     ORDER BY c.updated_at DESC NULLS LAST, c.created_at DESC
+     LIMIT 50`;
+}
+
+/** Full transcript for one conversation: turns plus the steps behind each run. */
+async function getSession(env: Env, id: string): Promise<any | null> {
+  const sql = db(env);
+  const convo: any[] = await sql`SELECT id, title, mode, created_at, updated_at
+                                   FROM ignis.conversation WHERE id = ${id}::uuid`;
+  if (!convo.length) return null;
+  const messages: any[] = await sql`SELECT id, role, content, created_at
+                                      FROM ignis.message WHERE conversation_id = ${id}::uuid
+                                      ORDER BY id`;
+  const runs: any[] = await sql`SELECT id, question, answer, answer_confidence, latency_ms, status, created_at
+                                  FROM ignis.agent_run WHERE conversation_id = ${id}::uuid
+                                  ORDER BY created_at`;
+  const runIds = runs.map((r) => r.id);
+  const steps: any[] = runIds.length
+    ? await sql`SELECT run_id, step_index, node, thought, tool, latency_ms
+                  FROM ignis.agent_step WHERE run_id = ANY(${runIds}::uuid[])
+                  ORDER BY run_id, step_index`
+    : [];
+  return { conversation: convo[0], messages, runs, steps };
 }
 
 /** Vector recall across the session store and the durable long-term store. */
@@ -903,6 +1587,29 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    if (request.method === "GET" && url.pathname === "/locales") {
+      return json({ locales: LOCALES, default: "en" });
+    }
+
+    if (request.method === "POST" && url.pathname === "/translate") {
+      let tbody: any = {};
+      try { tbody = await request.json(); } catch { /* ignore */ }
+      const locale = String(tbody.locale ?? "en").toLowerCase();
+      if (!LOCALE_CODES.has(locale)) {
+        return json({ error: `unsupported locale ${locale}`, supported: [...LOCALE_CODES] }, 400);
+      }
+      const strings: string[] = Array.isArray(tbody.strings)
+        ? tbody.strings.slice(0, 400).map((s: any) => String(s ?? "").slice(0, 500))
+        : [];
+      if (!strings.length) return json({ locale, translations: {}, cached: 0 });
+      try {
+        const translations = await translateStrings(env, locale, strings);
+        return json({ locale, translations });
+      } catch (err: any) {
+        return json({ error: String(err?.message ?? err) }, 500);
+      }
+    }
+
     if (request.method === "GET" && url.pathname === "/health") {
       const started = Date.now();
       try {
@@ -1030,6 +1737,72 @@ export default {
         return json({ document: docs[0], chunks, findings, experiments });
       }
 
+      if (request.method === "GET" && url.pathname === "/datasets") {
+        const sql = db(env);
+        const rows = await sql`
+          SELECT key, name, canonical_unit, value_count, document_count,
+                 recorded_unit_count, recorded_units, value_min, value_max,
+                 ranged_value_count, mean_confidence, extraction_methods
+            FROM ignis.dataset
+           ORDER BY value_count DESC, name`;
+        const total = rows.reduce((n: number, r: any) => n + Number(r.value_count ?? 0), 0);
+        return json({ datasets: rows, total_measurements: total });
+      }
+
+      const dsMatch = url.pathname.match(/^\/datasets\/([^/]+)$/);
+      if (request.method === "GET" && dsMatch) {
+        const sql = db(env);
+        const key = decodeURIComponent(dsMatch[1]);
+        const meta: any[] = await sql`SELECT * FROM ignis.dataset WHERE key = ${key} LIMIT 1`;
+        if (!meta.length) return json({ error: `dataset ${key} not found` }, 404);
+        const limit = Math.min(Number(url.searchParams.get("limit") || 200), 1000);
+        const rows: any[] = await sql`
+          SELECT finding_id, value, unit, raw_value, raw_unit, value_max, statement,
+                 evidence_quote, confidence, extraction_method, document_id,
+                 document_source_id, document_title, landing_url,
+                 experiment_code, experiment_name
+            FROM ignis.dataset_row
+           WHERE dataset_key = ${key}
+           ORDER BY value
+           LIMIT ${limit}`;
+        // Statistics come from SQL, not the client, so the UI cannot accidentally
+        // present a number that was computed over a truncated page of rows.
+        const stats: any[] = await sql`
+          SELECT count(*)::int AS n, round(min(value)::numeric,4) AS min_value,
+                 round(max(value)::numeric,4) AS max_value,
+                 round(avg(value)::numeric,4) AS mean_value,
+                 round(stddev_samp(value)::numeric,4) AS sd_value,
+                 round(percentile_cont(0.5) WITHIN GROUP (ORDER BY value)::numeric,4) AS median_value
+            FROM ignis.dataset_row WHERE dataset_key = ${key}`;
+        const histogram: any[] = await sql`
+          WITH b AS (SELECT width_bucket(value, min(value) OVER (), max(value) OVER (), 10) AS bucket, value FROM ignis.dataset_row WHERE dataset_key = ${key})
+          SELECT bucket, count(*)::int AS n, round(min(value)::numeric,4) AS lo, round(max(value)::numeric,4) AS hi
+            FROM b GROUP BY bucket ORDER BY bucket`;
+        return json({ dataset: meta[0], rows, stats: stats[0] ?? {}, histogram });
+      }
+
+      if (request.method === "GET" && url.pathname === "/global-search") {
+        const sql = db(env);
+        const query = (url.searchParams.get("q") || "").trim();
+        if (!query) return json({ query, experiments: [], datasets: [], documents: [], findings: [] });
+        const like = `%${query}%`;
+        const [experiments, datasets, documents, findings] = await Promise.all([
+          sql`SELECT code, name, campaign, objective FROM ignis.experiment
+               WHERE code ILIKE ${like} OR name ILIKE ${like} OR objective ILIKE ${like} OR ${query} = ANY(aliases)
+               ORDER BY code LIMIT 8`,
+          sql`SELECT key, name, canonical_unit, value_count FROM ignis.dataset
+               WHERE name ILIKE ${like} OR key ILIKE ${like} ORDER BY value_count DESC LIMIT 8`,
+          sql`SELECT id, source_id, title, kind, landing_url FROM ignis.document
+               WHERE title ILIKE ${like} OR abstract ILIKE ${like} OR search_tsv @@ websearch_to_tsquery('english', ${query})
+               ORDER BY quality_score DESC NULLS LAST LIMIT 10`,
+          sql`SELECT f.id, f.metric, f.value, f.unit, f.statement, f.document_id, f.evidence_quote
+                 FROM ignis.finding f
+                WHERE f.statement ILIKE ${like} OR f.metric ILIKE ${like}
+                ORDER BY f.metric LIMIT 10`,
+        ]);
+        return json({ query, experiments, datasets, documents, findings });
+      }
+
       if (request.method === "GET" && url.pathname === "/search") {
         const query = (url.searchParams.get("q") || "").trim();
         const k = Math.min(Number(url.searchParams.get("k") || 12), 50);
@@ -1039,6 +1812,35 @@ export default {
       }
     } catch (err: any) {
       return json({ error: String(err?.message ?? err) }, 500);
+    }
+
+    if (request.method === "GET" && url.pathname === "/sessions") {
+      try {
+        return json({ sessions: await listSessions(env) });
+      } catch (err: any) {
+        return json({ error: String(err?.message ?? err) }, 500);
+      }
+    }
+
+    const sessMatch = url.pathname.match(/^\/sessions\/([0-9a-fA-F-]{36})$/);
+    if (request.method === "GET" && sessMatch) {
+      try {
+        const s = await getSession(env, sessMatch[1]);
+        if (!s) return json({ error: "session not found" }, 404);
+        return json(s);
+      } catch (err: any) {
+        return json({ error: String(err?.message ?? err) }, 500);
+      }
+    }
+
+    if (request.method === "DELETE" && sessMatch) {
+      try {
+        const sql = db(env);
+        await sql`DELETE FROM ignis.conversation WHERE id = ${sessMatch[1]}::uuid`;
+        return json({ deleted: sessMatch[1] });
+      } catch (err: any) {
+        return json({ error: String(err?.message ?? err) }, 500);
+      }
     }
 
     if (request.method === "GET" && url.pathname === "/memory") {
@@ -1122,45 +1924,123 @@ export default {
       }
     }
 
+    // ---- Export: turn markdown into a downloadable PDF or DOCX ----
+    if (request.method === "POST" && url.pathname === "/export") {
+      let ebody: any = {};
+      try { ebody = await request.json(); } catch { /* ignore */ }
+      const md = String(ebody.markdown ?? "");
+      if (!md.trim()) return json({ error: "markdown is required" }, 400);
+      const format = String(ebody.format ?? "pdf").toLowerCase();
+      const name = safeFilename(String(ebody.filename ?? ebody.title ?? "ignis-report"));
+      // Charts are supplied as specs so the writer can render them for the
+      // target format: vector operators for PDF, a PNG for DOCX.
+      const charts: ChartSpec[] = Array.isArray(ebody.charts) ? ebody.charts : [];
+      const title = String(ebody.title ?? "IGNIS Research Report");
+      try {
+        if (format === "docx") {
+          return new Response(await markdownToDocx(md, title, charts), {
+            headers: {
+              ...cors,
+              "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              "content-disposition": `attachment; filename="${name}.docx"`,
+            },
+          });
+        }
+        if (format === "md") {
+          return new Response(md, {
+            headers: {
+              ...cors, "content-type": "text/markdown; charset=utf-8",
+              "content-disposition": `attachment; filename="${name}.md"`,
+            },
+          });
+        }
+        if (format !== "pdf") return json({ error: `unsupported format '${format}'` }, 400);
+        return new Response(markdownToPdf(md, title, charts), {
+          headers: {
+            ...cors, "content-type": "application/pdf",
+            "content-disposition": `attachment; filename="${name}.pdf"`,
+          },
+        });
+      } catch (err: any) {
+        return json({ error: String(err?.message ?? err) }, 500);
+      }
+    }
+
+    // ---- Visualisation: build a chart from real measured values ----
+    //
+    // The agent calls this instead of inventing numbers: it selects a dataset
+    // from `ignis.dataset_row`, so every plotted point is a recorded
+    // measurement. Returns the SVG for inline display plus the spec the export
+    // endpoint needs to embed the same chart in a PDF or DOCX.
+    if (request.method === "POST" && url.pathname === "/visualize") {
+      let vbody: any = {};
+      try { vbody = await request.json(); } catch { /* ignore */ }
+      const datasetKey = String(vbody.dataset ?? "").trim();
+      if (!datasetKey) {
+        return json({ error: "missing 'dataset'", hint: "call /datasets for available keys" }, 400);
+      }
+      const chartType = String(vbody.type ?? "bar");
+      if (!["bar", "line", "scatter"].includes(chartType)) {
+        return json({ error: `unsupported chart type '${chartType}'` }, 400);
+      }
+      const limit = Math.min(Math.max(Number(vbody.limit ?? 20), 2), 60);
+      try {
+        const sql = db(env);
+        const meta: any[] = await sql`SELECT * FROM ignis.dataset WHERE key = ${datasetKey} LIMIT 1`;
+        if (!meta.length) {
+          return json({ error: `dataset ${datasetKey} not found`, hint: "call /datasets for available keys" }, 404);
+        }
+        const unit = meta[0].canonical_unit ?? "";
+
+        // group_by=experiment compares experiments on one axis; otherwise plot
+        // the recorded values in order.
+        let rows: any[];
+        if (vbody.group_by === "experiment") {
+          rows = await sql`
+            SELECT coalesce(experiment_code, 'unlinked') AS label,
+                   count(*)::int AS n,
+                   round(avg(value)::numeric, 4) AS value
+              FROM ignis.dataset_row
+             WHERE dataset_key = ${datasetKey}
+             GROUP BY 1 ORDER BY value DESC LIMIT ${limit}`;
+        } else {
+          rows = await sql`
+            SELECT coalesce(experiment_code, document_source_id, 'recorded') AS label, value
+              FROM ignis.dataset_row
+             WHERE dataset_key = ${datasetKey}
+             ORDER BY value LIMIT ${limit}`;
+        }
+        if (!rows.length) return json({ error: `dataset ${datasetKey} has no rows` }, 404);
+
+        const spec: ChartSpec = {
+          type: chartType as ChartSpec["type"],
+          title: String(vbody.title ?? `${meta[0].name}${vbody.group_by === "experiment" ? " by experiment" : ""}`),
+          x_label: String(vbody.x_label ?? (vbody.group_by === "experiment" ? "experiment" : "measurement (ordered by value)")),
+          y_label: String(vbody.y_label ?? meta[0].name),
+          unit,
+          series: [{ label: meta[0].name, points: rows.map((r, i) => ({ x: chartType === "bar" ? String(r.label) : i + 1, y: Number(r.value) })) }],
+          source_note: `${rows.length} recorded values from NASA NTRS reports · extracted by regex · unit ${unit || "n/a"}`,
+        };
+
+        return json({
+          spec,
+          svg: renderSvg(spec),
+          dataset: meta[0],
+          rows,
+          note: "Values are measurements mined from NTRS report text, not a curated NASA dataset.",
+        });
+      } catch (err: any) {
+        return json({ error: String(err?.message ?? err) }, 500);
+      }
+    }
+
     if (request.method === "POST" && url.pathname === "/compare") {
       let cbody: any = {};
       try { cbody = await request.json(); } catch { /* ignore */ }
       const codes: string[] = (cbody.experiments || []).filter(Boolean);
       if (!codes.length) return json({ error: "provide at least one experiment code" }, 400);
       try {
-        const sql = db(env);
-        const exps = await sql`SELECT e.*, f.code AS facility_code, f.name AS facility_name, f.platform FROM ignis.experiment e LEFT JOIN ignis.facility f ON f.id = e.facility_id WHERE e.code = ANY(${codes})`;
-        if (!exps.length) return json({ experiments: [], dimensions: [], findings: {}, note: "no matching experiments" });
-        const ids = exps.map((e: any) => e.id);
-        const topic = cbody.topic || null;
-        const findings = await sql`SELECT ed.experiment_id, f.metric, f.value, f.value_max, f.unit, f.statement, f.confidence, d.title, d.source_id FROM ignis.finding f JOIN ignis.experiment_document ed ON ed.document_id = f.document_id JOIN ignis.document d ON d.id = f.document_id WHERE ed.experiment_id = ANY(${ids}) AND (${topic}::text IS NULL OR f.metric ILIKE '%' || ${topic}::text || '%') ORDER BY ed.experiment_id, f.metric`;
-        const docCounts = await sql`SELECT experiment_id, count(*) AS n FROM ignis.experiment_document WHERE experiment_id = ANY(${ids}) GROUP BY experiment_id`;
-        const counts = new Map(docCounts.map((r: any) => [r.experiment_id, Number(r.n)]));
-        const byExp: Record<string, any[]> = {};
-        for (const f of findings as any[]) {
-          (byExp[f.experiment_id] ??= []).push({
-            metric: f.metric, value: f.value, value_max: f.value_max, unit: f.unit,
-            statement: f.statement, confidence: f.confidence, document_title: f.title, source_id: f.source_id,
-          });
-        }
-        const dimensions = ["campaign", "facility_code", "platform", "status", "gravity_level", "fuel_type", "ambient_gas", "pressure_kpa", "o2_fraction", "ignition_source"];
-        const metricMatrix: Record<string, any> = {};
-        for (const e of exps as any[]) for (const f of byExp[e.id] ?? []) {
-          (metricMatrix[f.metric] ??= {})[e.id] ??= [];
-          metricMatrix[f.metric][e.id].push({ value: f.value, value_max: f.value_max, unit: f.unit });
-        }
-        return json({
-          experiments: (exps as any[]).map((e) => ({
-            id: e.id, code: e.code, name: e.name, campaign: e.campaign, facility: e.facility_code,
-            facility_name: e.facility_name, platform: e.platform, status: e.status, gravity_level: e.gravity_level,
-            fuel_type: e.fuel_type, ambient_gas: e.ambient_gas, pressure_kpa: e.pressure_kpa, o2_fraction: e.o2_fraction,
-            ignition_source: e.ignition_source, objective: e.objective, summary: e.summary,
-            document_count: counts.get(e.id) ?? 0,
-          })),
-          dimensions,
-          findings: Object.fromEntries((exps as any[]).map((e) => [String(e.id), byExp[e.id] ?? []])),
-          metric_matrix: Object.entries(metricMatrix).sort(([a], [b]) => a.localeCompare(b)).map(([metric, values]) => ({ metric, values })),
-        });
+        return json(await compareExperiments(env, codes, cbody.topic || null));
       } catch (err: any) {
         return json({ error: String(err?.message ?? err) }, 500);
       }
@@ -1182,10 +2062,16 @@ export default {
     const conversationId = typeof body.conversation_id === "string" && body.conversation_id
       ? body.conversation_id : undefined;
 
+    // The agentic loop is the default because it lets the model choose its own
+    // retrieval path. `pipeline=1` keeps the older fixed plan->retrieve->synth
+    // route reachable for comparison and as a fallback.
+    const usePipeline = url.searchParams.get("pipeline") === "1";
+    const runner = usePipeline ? runAgent : runAgentic;
+
     // Non-streaming JSON form for programmatic callers.
     if (url.pathname === "/ask-sync") {
       try {
-        const result = await runAgent(env, question, mode, model, k, () => {}, conversationId);
+        const result = await runner(env, question, mode, model, k, () => {}, conversationId);
         return json(result);
       } catch (err: any) {
         return json({ error: String(err?.message ?? err) }, 500);
@@ -1193,7 +2079,7 @@ export default {
     }
 
     return sseResponse((emit) =>
-      runAgent(env, question, mode, model, k, emit, conversationId)
+      runner(env, question, mode, model, k, emit, conversationId)
         .then((result) => emit("done", result)));
   },
 };

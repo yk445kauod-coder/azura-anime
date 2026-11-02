@@ -18,6 +18,10 @@ EMBED_MODEL = "@cf/baai/bge-small-en-v1.5"
 # Must match the `model` column in ignis.chunk_embedding (HF-style id).
 DB_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 DB_QUERY_FN = "ignis.search_chunks_hybrid"
+# Agentic loop: Astra reasons over its own tool calls. Set IGNIS_DEEP_MODEL to
+# A/B a different reasoning core without a code change.
+IGNIS_DEEP_MODEL = "gpt-6-astra"
+IGNIS_FAST_MODEL = "gpt-5.6-sol"
 
 # Secrets are injected at deploy time via wrangler secret / deploy script:
 #   NEON_DATABASE_URL        full postgres:// connection string (unpooled)

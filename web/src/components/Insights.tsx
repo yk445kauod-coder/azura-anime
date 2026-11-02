@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
 type Insight = {
   id: number; slug: string; title: string; body: string; category: string;
@@ -12,6 +13,7 @@ type Metric = {
 type Coverage = { code: string; name: string; campaign: string | null; documents: number };
 
 export default function Insights() {
+  const { t } = useI18n();
   const [insights, setInsights] = useState<Insight[]>([]);
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [coverage, setCoverage] = useState<Coverage[]>([]);
@@ -101,7 +103,7 @@ export default function Insights() {
             <table>
               <thead>
                 <tr>
-                  <th>Metric</th><th style={{ textAlign: "right" }}>n</th>
+                  <th>{t("Metric")}</th><th style={{ textAlign: "right" }}>n</th>
                   <th style={{ textAlign: "right" }}>min</th><th style={{ textAlign: "right" }}>mean</th>
                   <th style={{ textAlign: "right" }}>max</th><th>unit</th>
                 </tr>

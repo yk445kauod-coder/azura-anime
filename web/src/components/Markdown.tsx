@@ -21,6 +21,9 @@ export default function Markdown({ text }: { text: string }) {
       {text.split("\n").map((line, i) => {
         const t = line.trim();
         if (!t) return <div key={i} style={{ height: 8 }} />;
+        // Chart references are rendered by the Chart panel, so the placeholder
+        // line must not also appear as text.
+        if (/^!\[.*?\]\(chart:\d+\)$/.test(t)) return null;
         if (t.startsWith("### ")) return <h4 key={i}>{inline(t.slice(4))}</h4>;
         if (t.startsWith("## ")) return <h3 key={i}>{inline(t.slice(3))}</h3>;
         if (t.startsWith("# ")) return <h3 key={i}>{inline(t.slice(2))}</h3>;

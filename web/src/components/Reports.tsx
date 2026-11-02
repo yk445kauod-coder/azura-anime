@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { postSse } from "@/lib/sse";
 import Markdown from "@/components/Markdown";
+import { useI18n } from "@/lib/i18n";
 
 type Citation = {
   claim?: string; chunk_id?: number; document_id?: number; source_id?: string;
@@ -41,6 +42,7 @@ const TOPICS = [
 
 
 export default function Reports() {
+  const { t } = useI18n();
   const [topic, setTopic] = useState(TOPICS[0]);
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
@@ -118,7 +120,7 @@ export default function Reports() {
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !busy && topic.trim() && generate()}
-            placeholder="Research topic…"
+            placeholder={t("Research topic…")}
           />
           <button className="ghost" onClick={generate} disabled={busy || !topic.trim()}>
             {busy ? `researching… ${elapsed}s` : "Generate report"}
@@ -184,14 +186,14 @@ export default function Reports() {
           </div>
 
           <div className="card">
-            <h3>Executive Summary <small>generated from the findings below</small></h3>
+            <h3>{t("Executive Summary ")}<small>generated from the findings below</small></h3>
             <div className="answer">
               <Markdown text={report.summary} />
             </div>
           </div>
 
           <div className="card">
-            <h3>Key Findings <small>{report.key_findings.length} researched questions</small></h3>
+            <h3>{t("Key Findings ")}<small>{report.key_findings.length} researched questions</small></h3>
             {report.key_findings.map((f, i) => (
               <div key={i} className="hit" style={{ marginBottom: 14 }}>
                 <div className="row" style={{ justifyContent: "space-between" }}>
@@ -210,7 +212,7 @@ export default function Reports() {
 
           {report.comparative.length > 0 && (
             <div className="card">
-              <h3>Comparative Experiment View</h3>
+              <h3>{t("Comparative Experiment View")}</h3>
               {report.comparative.map((e, i) => (
                 <div key={i} className="row" style={{ justifyContent: "space-between" }}>
                   <span>{e.code || e.name}</span>
@@ -221,16 +223,16 @@ export default function Reports() {
           )}
 
           <div className="card">
-            <h3>Evidence Table <small>{report.evidence.length} ranked passages</small></h3>
+            <h3>{t("Evidence Table ")}<small>{report.evidence.length} ranked passages</small></h3>
             <div className="scroll" style={{ maxHeight: 460 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr className="muted">
                     <th style={{ textAlign: "left", padding: 6 }}>#</th>
                     <th style={{ textAlign: "left", padding: 6 }}>NTRS</th>
-                    <th style={{ textAlign: "left", padding: 6 }}>Section</th>
-                    <th style={{ textAlign: "right", padding: 6 }}>Score</th>
-                    <th style={{ textAlign: "left", padding: 6 }}>Quote</th>
+                    <th style={{ textAlign: "left", padding: 6 }}>{t("Section")}</th>
+                    <th style={{ textAlign: "right", padding: 6 }}>{t("Score")}</th>
+                    <th style={{ textAlign: "left", padding: 6 }}>{t("Quote")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -251,13 +253,13 @@ export default function Reports() {
           </div>
 
           <div className="card">
-            <h3>Data Limitations</h3>
+            <h3>{t("Data Limitations")}</h3>
             {report.limitations.map((l, i) => (
               <p key={i} className="muted">• {l}</p>
             ))}
             {report.recommendations.length > 0 && (
               <>
-                <h3 style={{ marginTop: 16 }}>Recommendations</h3>
+                <h3 style={{ marginTop: 16 }}>{t("Recommendations")}</h3>
                 {report.recommendations.map((r, i) => (
                   <p key={i} className="muted">• {r}</p>
                 ))}
@@ -266,7 +268,7 @@ export default function Reports() {
           </div>
 
           <div className="card">
-            <h3>References <small>{report.references.length} NTRS documents</small></h3>
+            <h3>{t("References ")}<small>{report.references.length} NTRS documents</small></h3>
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               {report.references.map((r) => (
                 <a key={r.source_id} className="tag" href={r.landing_url} target="_blank" rel="noreferrer">

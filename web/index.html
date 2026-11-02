@@ -8,8 +8,27 @@
       name="description"
       content="AI-powered research platform over NASA NTRS microgravity combustion and spacecraft fire-safety data."
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Noto+Naskh+Arabic:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+Devanagari:wght@400;600&display=swap&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
+    <script>
+      // Applied before first paint so direction and font stack are correct on load.
+      (function () {
+        try {
+          var saved = localStorage.getItem("ignis.locale");
+          var nav = (navigator.language || "en").slice(0, 2).toLowerCase();
+          var supported = ["en","ar","fr","es","de","pt","ru","zh","ja","hi"];
+          var code = saved && supported.indexOf(saved) > -1 ? saved : (supported.indexOf(nav) > -1 ? nav : "en");
+          document.documentElement.lang = code;
+          document.documentElement.dir = code === "ar" ? "rtl" : "ltr";
+        } catch (e) {}
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
