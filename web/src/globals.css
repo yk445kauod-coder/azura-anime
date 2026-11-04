@@ -313,11 +313,150 @@ td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-
 }
 @keyframes sp { to { transform: rotate(360deg); } }
 .scroll { max-height: 430px; overflow: auto; }
+
+/* ---------------- loading / empty / error states ----------------
+   Long-running views (dataset, report, comparison) need a visible shape
+   while they wait, so a slow request never reads as a broken page. */
+.state {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 34px 20px; text-align: center; color: var(--muted);
+}
+.state .state-title { color: var(--text); font-size: 13.5px; font-weight: 600; }
+.state .state-sub { font-size: 12.2px; max-width: 46ch; line-height: 1.55; }
+.state-row { display: flex; align-items: center; gap: 9px; }
+.state .retry { margin-top: 4px; }
+
+.skeleton {
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(255,255,255,.05) 25%, rgba(255,255,255,.11) 37%, rgba(255,255,255,.05) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+.skeleton-line { height: 11px; margin: 8px 0; }
+.skeleton-card { min-height: 96px; }
 .scroll.short { max-height: 240px; }
 .scroll::-webkit-scrollbar { width: 9px; height: 9px; }
 .scroll::-webkit-scrollbar-thumb { background: rgba(94, 118, 168, 0.4); border-radius: 5px; }
 
 .stack { display: flex; flex-direction: column; gap: 16px; }
+
+/* ---------------- agent chat + dynamic-island composer ---------------- */
+.agent-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 62vh;
+}
+.agent-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 8px;
+}
+.agent-hero {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  text-align: center; padding: 46px 18px 22px;
+}
+.agent-hero h2 { margin: 0; font-size: 21px; letter-spacing: -0.01em; }
+.agent-hero p { max-width: 54ch; margin: 0; }
+
+/* The orb is the agent's presence: a slow ember ring, no dependency. */
+.agent-orb {
+  width: 62px; height: 62px; border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, rgba(255, 196, 107, 0.95), rgba(255, 106, 31, 0.55) 45%, transparent 70%),
+    radial-gradient(circle at 60% 65%, rgba(120, 170, 255, 0.5), transparent 65%);
+  box-shadow: 0 0 44px -6px rgba(255, 122, 26, 0.7), inset 0 0 22px rgba(255, 255, 255, 0.16);
+  animation: orb-breathe 4.2s ease-in-out infinite;
+}
+.agent-orb.sm { width: 22px; height: 22px; box-shadow: 0 0 16px -2px rgba(255, 122, 26, 0.8); }
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.06); filter: brightness(1.18); }
+}
+
+.agent-suggest {
+  display: grid; gap: 8px; width: 100%; max-width: 640px; margin-top: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+.suggest {
+  display: flex; align-items: center; gap: 9px; text-align: start;
+  padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
+  color: var(--text-2); font-size: 12.6px; line-height: 1.4; cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+.suggest:hover { border-color: rgba(255, 122, 26, 0.5); background: var(--flame-soft); transform: translateY(-1px); }
+.suggest svg { color: var(--flame); flex: none; }
+
+.agent-turn { display: flex; flex-direction: column; gap: 10px; }
+.bubble {
+  max-width: 88%; padding: 13px 16px; border-radius: 16px; font-size: 13.6px;
+  border: 1px solid var(--line); animation: fade-in-up 0.35s ease both;
+}
+.bubble.user {
+  align-self: flex-end; margin-inline-start: auto;
+  background: linear-gradient(150deg, rgba(255, 106, 31, 0.22), rgba(255, 106, 31, 0.08));
+  border-color: rgba(255, 122, 26, 0.34); color: var(--text);
+  border-end-end-radius: 5px;
+}
+.bubble.agent {
+  align-self: flex-start; background: rgba(10, 14, 24, 0.66);
+  border-end-start-radius: 5px;
+}
+.bubble.agent.error { border-color: rgba(255, 84, 112, 0.42); }
+.bubble.working { width: 100%; max-width: 100%; }
+.agent-thinking { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 600; }
+
+.agent-details { margin-top: 12px; }
+.agent-details summary {
+  cursor: pointer; color: var(--muted); font-size: 12.4px; padding: 4px 0;
+}
+.agent-details summary:hover { color: var(--text-2); }
+
+/* Dynamic island: compact pill that grows on focus/typing. */
+.island-wrap {
+  position: sticky; bottom: 12px; z-index: 20;
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  margin-top: auto; padding-top: 8px;
+}
+.island {
+  width: min(760px, 100%);
+  border-radius: 26px; padding-block: 10px; padding-inline: 18px 12px;
+  background: rgba(12, 16, 27, 0.82);
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 50px -18px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+  backdrop-filter: blur(18px);
+  transition: border-radius 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 0.28s ease, transform 0.28s ease, border-color 0.2s ease;
+}
+.island:focus-within {
+  border-radius: 18px; border-color: rgba(255, 122, 26, 0.5);
+  box-shadow: 0 22px 60px -18px rgba(0, 0, 0, 0.9), 0 0 40px -14px rgba(255, 122, 26, 0.55);
+  transform: translateY(-2px);
+}
+.island.busy { border-color: rgba(255, 122, 26, 0.42); }
+.island-input {
+  width: 100%; border: 0; background: transparent; color: var(--text);
+  font-size: 14px; line-height: 1.55; resize: none; min-height: 24px;
+  max-height: 168px; outline: none; font-family: inherit; padding: 4px 0;
+}
+.island-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px;
+}
+.island-model { max-width: 200px; }
+.island-send {
+  margin-inline-start: auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 50%; border: 0; cursor: pointer;
+  background: linear-gradient(150deg, var(--flame), #ff8c1a); color: #1a0800;
+  transition: transform 0.16s ease, filter 0.16s ease;
+}
+.island-send:hover:not(:disabled) { transform: scale(1.06); filter: brightness(1.08); }
+.island-send:disabled { opacity: 0.45; cursor: not-allowed; }
+.island-hint { font-size: 11px; text-align: center; }
 
 /* ---------------- timeline ---------------- */
 .timeline { list-style: none; margin: 0; padding: 0; }
@@ -326,6 +465,24 @@ td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-
   border-bottom: 1px solid rgba(94, 118, 168, 0.16); font-size: 12.6px;
 }
 .timeline li:last-child { border-bottom: 0; }
+
+/* ---------------- smart ranking ---------------- */
+.rankbar {
+  display: flex; height: 8px; border-radius: 4px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.05); margin-top: 9px;
+}
+.rankbar > i { height: 100%; transition: width 0.35s ease; }
+.ranktable {
+  width: 100%; border-collapse: collapse; font-size: 12.2px; margin-top: 10px;
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+}
+.ranktable th, .ranktable td { padding: 7px 10px; text-align: start; }
+.ranktable th {
+  color: var(--muted); font-weight: 600; font-size: 10.6px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  background: rgba(255, 255, 255, 0.03);
+}
+.ranktable tbody tr { border-top: 1px solid rgba(94, 118, 168, 0.16); }
 .timeline li > span:last-child { color: var(--text-2); }
 .sublist { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; }
 .sublist li { margin: 3px 0; }

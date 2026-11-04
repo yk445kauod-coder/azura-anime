@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { postSse } from "@/lib/sse";
 import Markdown from "@/components/Markdown";
+import { ErrorState } from "@/components/States";
 import { useI18n } from "@/lib/i18n";
 
 type Citation = {
@@ -49,12 +50,16 @@ export default function Reports() {
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [progress, setProgress] = useState<{ question: string; ok: boolean }[]>([]);
+  const [stage, setStage] = useState<"idle" | "retrieving" | "assembling" | "done">("idle");
+  const [total, setTotal] = useState(0);
 
   async function generate() {
     setBusy(true);
     setError(null);
     setReport(null);
     setProgress([]);
+    setTotal(0);
+    setStage("retrieving");
     const t0 = Date.now();
     const tick = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 500);
     try {
@@ -63,8 +68,12 @@ export default function Reports() {
       await postSse("/api/report", { topic, stream: true }, (ev) => {
         const d = ev.data ?? {};
         if (ev.event === "report_progress") {
+          if (d.total) setTotal(d.total);
           setProgress((p) => [...p, { question: d.question, ok: !d.failed }]);
+        } else if (ev.event === "report_summary") {
+          setStage("assembling");
         } else if (ev.event === "done") {
+          setStage("done");
           setReport(d.report);
         } else if (ev.event === "error") {
           setError(d.error || "report failed");
@@ -75,6 +84,7 @@ export default function Reports() {
     } finally {
       clearInterval(tick);
       setBusy(false);
+      setStage("idle");
     }
   }
 
@@ -122,8 +132,8 @@ export default function Reports() {
             onKeyDown={(e) => e.key === "Enter" && !busy && topic.trim() && generate()}
             placeholder={t("Research topic…")}
           />
-          <button className="ghost" onClick={generate} disabled={busy || !topic.trim()}>
-            {busy ? `researching… ${elapsed}s` : "Generate report"}
+          <button className="primary" onClick={generate} disabled={busy || !topic.trim()}>
+            {busy ? t("Generating…") : t("Generate report")}
           </button>
           {report && (
             <button className="ghost" onClick={download}>
@@ -148,22 +158,51 @@ export default function Reports() {
           ))}
         </div>
         {busy && (
-          <div style={{ marginTop: 12 }}>
-            <p className="muted" style={{ margin: 0 }}>
-              Researching each question against the corpus, then assembling the report.
-            </p>
-            <ol className="timeline">
+          <div style={{ marginTop: 14 }} role="status" aria-live="polite">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+              <span className="state-row">
+                <span className="spin" />
+                <strong style={{ fontSize: 13 }}>
+                  {stage === "assembling" ? t("Assembling the report…") : t("Researching the corpus…")}
+                </strong>
+              </span>
+              <span className="muted" style={{ fontVariantNumeric: "tabular-nums" }}>
+                {progress.length}{total ? `/${total}` : ""} · {elapsed}s
+                {progress.length === 0 && elapsed > 8 ? " · usually 40–90s" : ""}
+              </span>
+            </div>
+            <div className="bar" style={{ marginTop: 10 }}>
+              <i
+                style={{
+                  width: `${total ? Math.round((progress.length / total) * 100) : Math.min(95, elapsed * 2)}%`,
+                  background: "linear-gradient(90deg, var(--flame), #ffc46b)",
+                }}
+              />
+            </div>
+            <ol className="timeline" style={{ marginTop: 12 }}>
               {progress.map((p, i) => (
                 <li key={i}>
-                  <span className={`tag ${p.ok ? "" : "sev-high"}`}>{p.ok ? "done" : "failed"}</span>
+                  <span className={`tag ${p.ok ? "" : "sev-high"}`}>{p.ok ? t("done") : t("failed")}</span>
                   <span>{p.question}</span>
                 </li>
               ))}
-              {progress.length === 0 && <li className="muted">starting…</li>}
+              {progress.length === 0 && (
+                <li className="muted">
+                  {t("Retrieving passages, grading evidence, then synthesizing each question…")}
+                </li>
+              )}
             </ol>
           </div>
         )}
-        {error && <div className="err" style={{ marginTop: 12 }}>{error}</div>}
+        {error && (
+          <div style={{ marginTop: 12 }}>
+            <ErrorState
+              title="Report generation failed"
+              message={error}
+              onRetry={topic.trim() ? generate : undefined}
+            />
+          </div>
+        )}
       </div>
 
       {report && (

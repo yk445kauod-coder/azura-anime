@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { Icon } from "@/components/Icon";
+import { ErrorState, Loading } from "@/components/States";
 import { clampPct, fmtInt, fmtNum, n, pct } from "@/lib/format";
 
 type Insight = {
@@ -22,6 +23,7 @@ export default function Insights() {
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [coverage, setCoverage] = useState<Coverage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
   const [q, setQ] = useState("");
 
@@ -34,10 +36,18 @@ export default function Insights() {
         setMetrics(d.metrics ?? []);
         setCoverage(d.coverage ?? []);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false));
   }, []);
 
-  if (error) return <div className="card err">{error}</div>;
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const i of insights) c[i.severity] = (c[i.severity] ?? 0) + 1;
+    return c;
+  }, [insights]);
+
+  if (error) return <ErrorState title="Could not load insights" message={error} onRetry={() => location.reload()} />;
+  if (loading) return <Loading title={t("Loading insights…")} sub={t("Fetching curated findings and extracted metrics.")} rows={4} />;
 
   const categories = Array.from(new Set(insights.map((i) => i.category)));
   const shown = insights.filter((i) => {
@@ -48,12 +58,6 @@ export default function Insights() {
     }
     return true;
   });
-
-  const counts = useMemo(() => {
-    const c: Record<string, number> = {};
-    for (const i of insights) c[i.severity] = (c[i.severity] ?? 0) + 1;
-    return c;
-  }, [insights]);
 
   const maxCoverage = Math.max(1, ...coverage.map((c) => n(c.documents) ?? 0));
   const sevTotal = insights.length || 1;

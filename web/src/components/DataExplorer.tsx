@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { ErrorState, Loading } from "@/components/States";
 
 /**
  * Data Explorer.
@@ -228,7 +229,15 @@ export default function DataExplorer({ focusKey }: { focusKey?: string }) {
         </div>
       </div>
 
-      {error && <div className="card err">{error}</div>}
+      {error && (
+        <ErrorState
+          title="Could not load the dataset"
+          message={error}
+          onRetry={() => { setError(null); setKey((k) => k || datasets[0]?.key || ""); }}
+        />
+      )}
+
+      {loading && !data && <Loading title={t("Loading dataset…")} sub={t("Fetching mined measurements and their source passages.")} rows={5} />}
 
       <div className="card">
         <div className="row">
@@ -345,7 +354,7 @@ export default function DataExplorer({ focusKey }: { focusKey?: string }) {
                       <td>{r.unit ?? "—"}</td>
                       <td className="muted">{num(r.raw_value, 3)} {r.raw_unit ?? ""}</td>
                       <td style={{ textAlign: "right" }}>{num(r.confidence, 2)}</td>
-                      <td>{r.experiment_code ?? <span className="muted">—</span>}</td>
+                      <td>{r.experiment_code ?? <span className="muted" title={t("This finding's source document is not linked to a catalogued campaign.")}>{t("not linked")}</span>}</td>
                       <td style={{ maxWidth: 260 }}>
                         {r.landing_url ? (
                           <a href={r.landing_url} target="_blank" rel="noreferrer">
@@ -381,7 +390,6 @@ export default function DataExplorer({ focusKey }: { focusKey?: string }) {
         </>
       )}
 
-      {loading && !data && <div className="card"><span className="spin" /> loading dataset…</div>}
     </div>
   );
 }

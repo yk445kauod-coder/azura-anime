@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { ErrorState, Loading } from "@/components/States";
 
 type CompareResult = {
   experiments: Record<string, unknown>[];
@@ -8,6 +9,33 @@ type CompareResult = {
   metric_matrix: { metric: string; values: Record<string, { value: number; value_max: number | null; unit: string }[]> }[];
   note?: string;
 };
+
+/**
+ * Physical sanity bounds per metric.
+ *
+ * Values outside these ranges are almost always a regex that grabbed a number
+ * from a reference or an equation rather than a measurement (e.g. a "10 K"
+ * flame temperature). They are shown as flagged rather than silently dropped,
+ * so the underlying extraction can still be audited.
+ */
+const SANITY: Record<string, { min: number; max: number; unit: string }> = {
+  temperature: { min: 200, max: 4000, unit: "K" },
+  flame_temperature: { min: 200, max: 4000, unit: "K" },
+  spread_rate: { min: 0, max: 500, unit: "mm/s" },
+  flame_spread_rate: { min: 0, max: 500, unit: "mm/s" },
+  extinction_time: { min: 0, max: 100000, unit: "s" },
+  pressure: { min: 0, max: 100000, unit: "kPa" },
+};
+
+function sanityFlag(metric: string, value: number): string | null {
+  const key = metric.toLowerCase().replace(/[^a-z_]/g, "_");
+  const bound = SANITY[key] ?? Object.entries(SANITY).find(([k]) => key.includes(k))?.[1];
+  if (!bound) return null;
+  if (value < bound.min || value > bound.max) {
+    return `outside expected ${bound.min}–${bound.max} ${bound.unit}`;
+  }
+  return null;
+}
 
 const LABELS: Record<string, string> = {
   campaign: "Campaign", facility: "Facility", facility_name: "Facility name",
@@ -92,7 +120,21 @@ export default function Compare() {
         </div>
       </div>
 
-      {error && <div className="card err">{error}</div>}
+      {error && (
+        <ErrorState
+          title="Comparison failed"
+          message={error}
+          onRetry={chosen.length ? run : undefined}
+        />
+      )}
+
+      {loading && !result && (
+        <Loading
+          title={t("Comparing experiments…")}
+          sub={t("Aligning conditions and extracting comparable metrics.")}
+          rows={4}
+        />
+      )}
 
       {result && (
         <>
@@ -157,11 +199,22 @@ export default function Compare() {
                           <td key={String(e.code) + row.metric}>
                             {vals.length === 0
                               ? "—"
-                              : vals.slice(0, 4).map((v, i) => (
-                                  <div key={i}>
-                                    {v.value}{v.value_max ? `–${v.value_max}` : ""} {v.unit}
-                                  </div>
-                                ))}
+                              : vals.slice(0, 4).map((v, i) => {
+                                  const flag = sanityFlag(row.metric, v.value);
+                                  return (
+                                    <div key={i} title={flag ? `Suspected extraction — ${flag}` : undefined}>
+                                      {v.value}{v.value_max ? `–${v.value_max}` : ""} {v.unit}
+                                      {flag && (
+                                        <span
+                                          className="tag sev-high"
+                                          style={{ marginInlineStart: 6, fontSize: 10 }}
+                                        >
+                                          {t("suspected")}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                           </td>
                         );
                       })}

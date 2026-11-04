@@ -174,6 +174,16 @@ METRIC_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     ("flame temperature", re.compile(r"(?:flame|adiabatic)\s+temperature[^\d]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(K|°C|C)", re.I), "K"),
     ("pressure", re.compile(r"(?:ambient\s+)?pressure[^\d]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(kPa|atm|bar|torr|psi)", re.I), "kPa"),
     ("gravity level", re.compile(r"([\d.]+)\s*(?:x|×)?\s*10\s*(?:\^|⁻|\*\*)?\s*[-−]?\s*(\d+)?\s*(?:g\b)", re.I), "g"),
+    # The metrics below broaden corpus coverage. Each pattern requires the
+    # quantity's own name and a unit on the same line, so precision stays high
+    # even though the surrounding prose is unstructured.
+    ("droplet diameter", re.compile(r"droplet\s+(?:diameter|size)[^\d]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(mm|µm|um|micron[s]?)", re.I), "mm"),
+    ("oxygen concentration", re.compile(r"(?:oxygen|O2)\s+(?:concentration|mole\s*fraction)[^\d%]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(%|vol\s*%|mole\s*fraction)", re.I), "vol%"),
+    ("flow velocity", re.compile(r"(?:opposed|forced|air|oxidizer)\s+flow\s+velocity[^\d]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(mm/s|cm/s|m/s)", re.I), "cm/s"),
+    ("flame length", re.compile(r"flame\s+length[s]?[^\d]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(mm|cm|m)(?![a-zA-Z/])", re.I), "mm"),
+    ("flame height", re.compile(r"flame\s+height[s]?[^\d]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(mm|cm|m)(?![a-zA-Z/])", re.I), "mm"),
+    ("burn time", re.compile(r"(?:burn|burning|combustion)\s+time[s]?[^\d]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(s|ms|min)\b", re.I), "s"),
+    ("heat release rate", re.compile(r"heat\s+release\s+rate[s]?[^\d]{0,20}([\d.]+)\s*(?:to\s*([\d.]+)\s*)?(kW|W|MW)", re.I), "W"),
 ]
 
 EVIDENCE_SENTENCE = re.compile(r"[^.]*?\b(?:flame|fire|burn|smolder|ignit|extinct|soot|smoke|flammab)\w*[^.]*\.", re.I)
@@ -190,6 +200,11 @@ def _normalize_quote(quote: str) -> str:
 def extract_findings(text: str, document_id: int, limit: int = 40) -> list[dict]:
     out: list[dict] = []
     seen: set[tuple] = set()
+    # PDF text sometimes breaks a doubled unit letter across a space — "14.9m m"
+    # for "14.9 mm", "5 c m" for "5 cm". Rejoin before matching so the unit is
+    # read as written rather than as a bare metre.
+    text = re.sub(r"(?<=\d)\s*m\s+m\b", " mm", text)
+    text = re.sub(r"(?<=\d)\s+c\s+m\b", " cm", text)
     for metric, pattern, default_unit in METRIC_PATTERNS:
         for m in pattern.finditer(text):
             try:

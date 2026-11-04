@@ -1,12 +1,12 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
-  Flame, Home, Database, BarChart3, Sparkles, FileText, Satellite, MapPin,
-  Rocket,
+  Flame, Home, Database, BarChart3, Sparkles, FileText, Satellite,
+  Rocket, Gauge,
 } from "lucide-react";
 
 import MissionControl from "@/components/MissionControl";
 import GlobalSearch from "@/components/GlobalSearch";
-import { LocalePicker } from "@/lib/i18n";
+import { LocalePicker, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 // Every non-default view is its own chunk, so a phone opening Mission Control
@@ -18,6 +18,7 @@ const Explorer = lazy(() => import("@/components/Explorer"));
 const Compare = lazy(() => import("@/components/Compare"));
 const Insights = lazy(() => import("@/components/Insights"));
 const Reports = lazy(() => import("@/components/Reports"));
+const SmartRanking = lazy(() => import("@/components/SmartRanking"));
 
 export type Health = {
   status: string;
@@ -36,17 +37,18 @@ const NAV_OPERATIONS = [
 const NAV_SCIENCE = [
   { id: "data", label: "Data Explorer", icon: BarChart3 },
   { id: "intel", label: "IGNIS Intelligence", icon: Sparkles },
+  { id: "rank", label: "Smart Ranking", icon: Gauge },
   { id: "publications", label: "Publications", icon: FileText },
   { id: "compare", label: "Comparative Analysis", icon: BarChart3 },
   { id: "insights", label: "Fire Safety Insights", icon: Database },
 ] as const;
 
 type ViewId =
-  | "mission" | "flame" | "reports" | "data" | "intel"
+  | "mission" | "flame" | "reports" | "data" | "intel" | "rank"
   | "publications" | "compare" | "insights";
 
 const VALID_VIEWS: readonly string[] = [
-  "mission", "flame", "reports", "data", "intel", "publications", "compare", "insights",
+  "mission", "flame", "reports", "data", "intel", "rank", "publications", "compare", "insights",
 ];
 
 function MissionClock() {
@@ -79,6 +81,7 @@ function PanelFallback() {
 }
 
 export default function App() {
+  const { t } = useI18n();
   const [view, setView] = useState<ViewId>(() => {
     const h = (typeof location !== "undefined" ? location.hash.replace(/^#\/?/, "") : "") as ViewId;
     return VALID_VIEWS.includes(h) ? h : "mission";
@@ -120,7 +123,7 @@ export default function App() {
   ) => (
     <div>
       <p className="px-4 pb-2 pt-4 font-mono text-[10px] font-medium uppercase tracking-[0.3em] text-muted-foreground/70">
-        {title}
+        {t(title)}
       </p>
       <div className="space-y-1 px-3">
         {items.map(({ id, label, icon: Icon }) => {
@@ -130,14 +133,14 @@ export default function App() {
               key={id}
               onClick={() => navigate(id)}
               className={cn(
-                "flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-left text-sm font-medium transition-colors",
+                "flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-start text-sm font-medium transition-colors",
                 isActive
-                  ? "bg-primary/15 text-primary shadow-[inset_2px_0_0_0_var(--ember)]"
+                  ? "bg-primary/15 text-primary shadow-[inset_2px_0_0_0_var(--ember)] rtl:shadow-[inset_-2px_0_0_0_var(--ember)]"
                   : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
               )}
             >
-              <Icon className={cn("size-4", isActive && "text-ember")} />
-              {label}
+              <Icon className={cn("size-4 shrink-0", isActive && "text-ember")} />
+              <span className="truncate">{t(label)}</span>
             </button>
           );
         })}
@@ -172,7 +175,7 @@ export default function App() {
 
       <div className="relative flex min-h-screen">
         {/* sidebar */}
-        <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-background/70 backdrop-blur-xl lg:flex">
+        <aside className="hidden w-64 shrink-0 flex-col border-e border-border bg-background/70 backdrop-blur-xl lg:flex">
           <div className="flex items-center gap-3 px-5 py-6">
             <span className="ember-glow grid size-11 place-items-center rounded-xl bg-primary/15 text-ember">
               <Flame className="size-6" />
@@ -209,7 +212,7 @@ export default function App() {
         {/* main column */}
         <div className="flex min-w-0 flex-1 flex-col">
           {/* topbar */}
-          <header className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border bg-background/50 px-6 py-3 backdrop-blur-xl">
+          <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-background/50 px-4 py-3 backdrop-blur-xl md:px-6">
             <span
               className={cn(
                 "flex items-center gap-2 font-mono text-xs font-semibold uppercase tracking-wider",
@@ -217,18 +220,17 @@ export default function App() {
               )}
             >
               <span className={cn("size-2 rounded-full live-dot", online ? "bg-success" : "bg-destructive")} />
-              {online ? "System Online" : health ? "Backend Offline" : "Connecting"}
+              {online ? t("System Online") : health ? t("Backend Offline") : t("Connecting")}
             </span>
-            <span className="hidden text-sm text-muted-foreground md:inline">
-              Mission: <span className="font-medium text-foreground">Combustion Research</span>
-            </span>
-            <span className="hidden items-center gap-2 text-sm text-muted-foreground xl:flex">
-              <Satellite className="size-4 text-telemetry" /> NASA NTRS — Live Corpus
-            </span>
-            <span className="hidden items-center gap-2 text-sm text-muted-foreground md:flex">
-              <MapPin className="size-4 text-telemetry" /> Alexandria, Egypt
-            </span>
-            <span className="ml-auto flex items-center gap-3">
+            <div className="hidden items-center gap-x-5 text-sm text-muted-foreground lg:flex">
+              <span>
+                {t("Mission")}: <span className="font-medium text-foreground">{t("Combustion Research")}</span>
+              </span>
+              <span className="hidden items-center gap-2 xl:flex">
+                <Satellite className="size-4 text-telemetry" /> {t("NASA NTRS — Live Corpus")}
+              </span>
+            </div>
+            <div className="ms-auto flex items-center gap-2 md:gap-3">
               <GlobalSearch
                 onPick={({ tab, ref }) =>
                   navigate((tab === "explorer" ? "publications" : tab) as ViewId, ref)
@@ -236,7 +238,7 @@ export default function App() {
               />
               <LocalePicker />
               <MissionClock />
-            </span>
+            </div>
           </header>
 
           <main className="flex-1 space-y-4 p-4 md:p-6">
@@ -250,6 +252,7 @@ export default function App() {
                 {view === "compare" && <Compare />}
                 {view === "insights" && <Insights />}
                 {view === "reports" && <Reports />}
+                {view === "rank" && <SmartRanking />}
               </Suspense>
             )}
           </main>

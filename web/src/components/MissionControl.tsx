@@ -80,7 +80,7 @@ function StatusCard({
   return (
     <Tag
       onClick={onClick}
-      className={cn("mission-panel flex items-center gap-4 p-5", onClick && "text-left")}
+      className={cn("mission-panel flex items-center gap-4 p-5", onClick && "text-start")}
     >
       <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-telemetry/10">{icon}</span>
       <div className="min-w-0">
@@ -240,7 +240,7 @@ export default function MissionControl({
         />
         <button
           onClick={() => onNavigate?.("flame")}
-          className="mission-panel group flex items-center gap-4 p-5 text-left transition-colors hover:border-primary/40"
+          className="mission-panel group flex items-center gap-4 p-5 text-start transition-colors hover:border-primary/40"
         >
           <FlaskConical className="size-8 shrink-0 text-ember" />
           <div className="min-w-0">
@@ -251,7 +251,7 @@ export default function MissionControl({
               {fmtInt(s.experiments)} {t("experiments")}
             </p>
           </div>
-          <ArrowRight className="ml-auto size-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-1 group-hover:text-ember" />
+          <ArrowRight className="ms-auto size-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-1 rtl:group-hover:-translate-x-1 group-hover:text-ember" />
         </button>
       </section>
 
@@ -263,7 +263,7 @@ export default function MissionControl({
             <h2 className="font-mono text-[11px] font-semibold uppercase tracking-[0.3em]">
               {t("Combustion Visualization")}
             </h2>
-            <span className="ml-auto flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-3 py-1 font-mono text-[10px] font-semibold uppercase tracking-widest text-success">
+            <span className="ms-auto flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-3 py-1 font-mono text-[10px] font-semibold uppercase tracking-widest text-success">
               <span className="size-1.5 rounded-full bg-success live-dot" /> {t("Live Experiment")}
             </span>
           </div>
@@ -277,10 +277,10 @@ export default function MissionControl({
                 loading="lazy"
               />
               <div className="scanlines absolute inset-0" />
-              <span className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-destructive backdrop-blur">
+              <span className="absolute start-3 top-3 flex items-center gap-2 rounded-full bg-black/60 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-destructive backdrop-blur">
                 <span className="size-1.5 rounded-full bg-destructive live-dot" /> {t("Rec")}
               </span>
-              <span className="absolute bottom-12 right-3 rounded bg-black/55 px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-white/70 backdrop-blur">
+              <span className="absolute bottom-12 end-3 rounded bg-black/55 px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-white/70 backdrop-blur">
                 {t("NASA · Fire in Space")}
               </span>
               <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
@@ -334,7 +334,7 @@ export default function MissionControl({
             <h2 className="font-mono text-[11px] font-semibold uppercase tracking-[0.3em]">
               {t("IGNIS Assistant")}
             </h2>
-            <span className="ml-auto rounded-full border border-border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            <span className="ms-auto rounded-full border border-border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
               AI
             </span>
           </div>
@@ -342,17 +342,17 @@ export default function MissionControl({
           <div className="flex max-h-[380px] min-h-[300px] flex-1 flex-col gap-3 overflow-y-auto p-4">
             {chat.map((m, i) =>
               m.role === "user" ? (
-                <div key={i} className="ml-8 rounded-xl rounded-tr-sm bg-primary/90 px-4 py-2.5 text-sm text-primary-foreground">
+                <div key={i} className="ms-8 rounded-xl rounded-se-sm bg-primary/90 px-4 py-2.5 text-sm text-primary-foreground">
                   {m.text}
                 </div>
               ) : (
-                <div key={i} className="mr-4 whitespace-pre-wrap rounded-xl rounded-tl-sm bg-secondary px-4 py-2.5 text-sm leading-relaxed text-foreground/90">
+                <div key={i} className="me-4 whitespace-pre-wrap rounded-xl rounded-ss-sm bg-secondary px-4 py-2.5 text-sm leading-relaxed text-foreground/90">
                   {m.text}
                 </div>
               ),
             )}
             {busy && (
-              <div className="mr-4 flex items-center gap-2 rounded-xl rounded-tl-sm bg-secondary px-4 py-2.5 text-sm text-muted-foreground">
+              <div className="me-4 flex items-center gap-2 rounded-xl rounded-ss-sm bg-secondary px-4 py-2.5 text-sm text-muted-foreground">
                 <span className="size-3 animate-spin rounded-full border-2 border-white/20 border-t-ember" />
                 {t("thinking…")}
               </div>

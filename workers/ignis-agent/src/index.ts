@@ -81,6 +81,11 @@ function lexicalOverlap(text: string, terms: string[]): number {
   return hits / terms.length;
 }
 
+interface RankFactors {
+  fusion: number; rerank: number; quality: number; domain: number;
+  fusion_raw: number; rerank_raw: number; quality_raw: number; domain_raw: number;
+}
+
 interface Hit {
   chunk_id: number; document_id: number; title: string; source_id: string;
   ordinal: number; kind: string; section_path: string | null; content: string;
@@ -88,7 +93,17 @@ interface Hit {
   rerank_score: number; final_score: number; quality_score: number;
   landing_url: string; published_date: string | null;
   sub_question: string | null; relevance: string;
+  factors?: RankFactors;
 }
+
+/**
+ * Smart-ranking weights.
+ *
+ * The fused retrieval score dominates, a lexical rerank refines it, corpus
+ * quality and combustion-domain density break ties. Exposed so the dashboard
+ * can show a reviewer exactly why one passage outranked another.
+ */
+const RANK_WEIGHTS = { fusion: 0.40, rerank: 0.34, quality: 0.16, domain: 0.10 } as const;
 
 function toHit(row: any, subQuestion?: string): Hit {
   return {
@@ -210,7 +225,23 @@ function smartRank(hits: Hit[], question: string): Hit[] {
   const maxFused = Math.max(...hits.map((h) => h.fused_score)) || 1;
   for (const h of hits) {
     const norm = h.fused_score / maxFused;
-    h.final_score = 0.40 * norm + 0.34 * h.rerank_score + 0.16 * h.quality_score + 0.10 * domainDensity(h.content);
+    const domain = domainDensity(h.content);
+    h.final_score =
+      RANK_WEIGHTS.fusion * norm +
+      RANK_WEIGHTS.rerank * h.rerank_score +
+      RANK_WEIGHTS.quality * h.quality_score +
+      RANK_WEIGHTS.domain * domain;
+    // Keep each weighted contribution so the UI can render the score breakdown.
+    h.factors = {
+      fusion: RANK_WEIGHTS.fusion * norm,
+      rerank: RANK_WEIGHTS.rerank * h.rerank_score,
+      quality: RANK_WEIGHTS.quality * h.quality_score,
+      domain: RANK_WEIGHTS.domain * domain,
+      fusion_raw: norm,
+      rerank_raw: h.rerank_score,
+      quality_raw: h.quality_score,
+      domain_raw: domain,
+    };
   }
   hits.sort((a, b) => b.final_score - a.final_score);
   return hits;
@@ -1714,7 +1745,7 @@ export default {
           sql`SELECT kind, count(*)::int AS n FROM ignis.document GROUP BY kind ORDER BY n DESC`,
           sql`SELECT extract(year FROM published_date)::int AS year, count(*)::int AS n FROM ignis.document WHERE published_date IS NOT NULL GROUP BY 1 ORDER BY 1`,
           sql`SELECT d.id, d.source_id, d.title, d.kind, d.word_count, d.quality_score, d.published_date, d.landing_url, (SELECT count(*)::int FROM ignis.chunk c WHERE c.document_id = d.id) AS chunks FROM ignis.document d ORDER BY d.quality_score DESC NULLS LAST LIMIT 12`,
-          sql`SELECT metric, count(*)::int AS n, round(min(value)::numeric,3) AS min_value, round(max(value)::numeric,3) AS max_value, mode() WITHIN GROUP (ORDER BY unit) AS unit FROM ignis.finding WHERE value IS NOT NULL GROUP BY metric HAVING count(*) >= 2 ORDER BY n DESC LIMIT 12`,
+          sql`SELECT metric, count(*)::int AS n, round(min(value)::numeric,3) AS min_value, round(max(value)::numeric,3) AS max_value, mode() WITHIN GROUP (ORDER BY unit) AS unit FROM ignis.dataset_row GROUP BY metric ORDER BY n DESC LIMIT 12`,
           sql`SELECT stage, status, items_in, items_out, bytes_in, started_at, finished_at FROM ignis.pipeline_run ORDER BY id DESC LIMIT 10`,
         ]);
         return json({
@@ -1733,7 +1764,7 @@ export default {
       if (request.method === "GET" && url.pathname === "/experiments") {
         const sql = db(env);
         const [experiments, facilities] = await Promise.all([
-          sql`SELECT e.id, e.code, e.name, e.campaign, e.status, e.gravity_level, e.fuel_type, e.ambient_gas, e.o2_fraction, e.pressure_kpa, e.objective, e.summary, e.aliases, f.code AS facility, f.name AS facility_name, f.platform, (SELECT count(*)::int FROM ignis.experiment_document ed WHERE ed.experiment_id = e.id) AS documents, (SELECT count(*)::int FROM ignis.finding fi WHERE fi.experiment_id = e.id) AS findings FROM ignis.experiment e LEFT JOIN ignis.facility f ON f.id = e.facility_id ORDER BY documents DESC, e.code`,
+          sql`SELECT e.id, e.code, e.name, e.campaign, e.status, e.gravity_level, e.fuel_type, e.ambient_gas, e.o2_fraction, e.pressure_kpa, e.objective, e.summary, e.aliases, f.code AS facility, f.name AS facility_name, f.platform, (SELECT count(*)::int FROM ignis.experiment_document ed WHERE ed.experiment_id = e.id) AS documents, (SELECT count(DISTINCT fi.id)::int FROM ignis.finding fi JOIN ignis.experiment_document ed ON ed.document_id = fi.document_id WHERE ed.experiment_id = e.id) AS findings FROM ignis.experiment e LEFT JOIN ignis.facility f ON f.id = e.facility_id ORDER BY documents DESC, e.code`,
           sql`SELECT f.id, f.code, f.name, f.platform, f.agency, f.g_level, f.description, (SELECT count(*)::int FROM ignis.experiment e WHERE e.facility_id = f.id) AS experiments FROM ignis.facility f ORDER BY f.code`,
         ]);
         return json({
@@ -1745,7 +1776,7 @@ export default {
         const sql = db(env);
         const [insights, metrics, coverage] = await Promise.all([
           sql`SELECT id, slug, title, body, category, severity, confidence, supporting_documents, generated_by, created_at FROM ignis.insight ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, confidence DESC`,
-          sql`SELECT metric, count(*)::int AS n, round(min(value)::numeric,3) AS min_value, round(max(value)::numeric,3) AS max_value, round(avg(value)::numeric,3) AS avg_value, mode() WITHIN GROUP (ORDER BY unit) AS unit FROM ignis.finding WHERE value IS NOT NULL GROUP BY metric HAVING count(*) >= 2 ORDER BY n DESC`,
+          sql`SELECT metric, count(*)::int AS n, round(min(value)::numeric,3) AS min_value, round(max(value)::numeric,3) AS max_value, round(avg(value)::numeric,3) AS avg_value, mode() WITHIN GROUP (ORDER BY unit) AS unit FROM ignis.dataset_row GROUP BY metric ORDER BY n DESC`,
           sql`SELECT e.code, e.name, e.campaign, count(DISTINCT ed.document_id)::int AS documents FROM ignis.experiment e LEFT JOIN ignis.experiment_document ed ON ed.experiment_id = e.id GROUP BY e.code, e.name, e.campaign ORDER BY documents ASC`,
         ]);
         return json({
@@ -1905,6 +1936,38 @@ export default {
         if (!query) return json({ query: "", hits: [] });
         const hits = await retrieve(env, query, k);
         return json({ query, hits: hits.map((h) => ({ ...h })) });
+      }
+
+      // Smart Ranking explainer: the full pipeline with every score exposed so a
+      // reviewer can see why a passage ranked where it did.
+      if (request.method === "GET" && url.pathname === "/rank") {
+        const query = (url.searchParams.get("q") || "").trim();
+        const k = Math.min(Number(url.searchParams.get("k") || 10), 30);
+        if (!query) return json({ error: "q is required" }, 400);
+        const t0 = Date.now();
+        const qvec = await embedOne(env, query);
+        // Fetch a wide candidate pool so ranking has something to reorder; the
+        // user-facing k only bounds the final diversified selection.
+        const raw = await hybridSearch(env, query, qvec, 60, 80);
+        rerank(query, raw);
+        const ranked = smartRank([...raw], query);
+        const diversified = mmrDiversify([...ranked], k);
+        const grade = heuristicGrade(diversified);
+        const kept = new Set(diversified.map((h) => h.chunk_id));
+        return json({
+          query,
+          k,
+          weights: RANK_WEIGHTS,
+          pool: raw.length,
+          latency_ms: Date.now() - t0,
+          verdict: grade.verdict,
+          grade_score: Number(grade.score.toFixed(4)),
+          hits: ranked.map((h, i) => ({
+            ...h,
+            pre_rank: i + 1,
+            diversified: kept.has(h.chunk_id),
+          })),
+        });
       }
     } catch (err: any) {
       return json({ error: String(err?.message ?? err) }, 500);

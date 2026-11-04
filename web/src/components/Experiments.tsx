@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { EmptyState, ErrorState, Loading, SkeletonGrid } from "@/components/States";
 
 type Experiment = {
   id: number; code: string; name: string; campaign: string | null; status: string | null;
@@ -13,34 +14,63 @@ type Facility = {
   g_level: string | null; description: string | null; experiments: number;
 };
 
+/**
+ * Module-level cache.
+ *
+ * The campaign list is small and changes rarely, so it is fetched once per
+ * session and reused. Re-opening Flame Lab then paints from memory instead of
+ * showing a spinner, which is what made the tab read as "not loaded".
+ */
+let listCache: { experiments: Experiment[]; facilities: Facility[] } | null = null;
+
 export default function Experiments({ focusRef }: { focusRef?: string }) {
   const { t } = useI18n();
-  const [experiments, setExperiments] = useState<Experiment[]>([]);
-  const [facilities, setFacilities] = useState<Facility[]>([]);
+  const [experiments, setExperiments] = useState<Experiment[]>(listCache?.experiments ?? []);
+  const [facilities, setFacilities] = useState<Facility[]>(listCache?.facilities ?? []);
   const [selected, setSelected] = useState<Experiment | null>(null);
   const [detail, setDetail] = useState<{
     documents: { id: number; source_id: string; title: string; kind: string; published_date: string | null; quality_score: number; landing_url: string }[];
     findings: { metric: string; value: number; value_max: number | null; unit: string; statement: string; evidence_quote: string }[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(!listCache);
+  const [detailLoading, setDetailLoading] = useState(false);
 
-  useEffect(() => {
+  function load() {
+    setLoading(true);
+    setError(null);
     fetch("/api/experiments")
       .then((r) => r.json())
       .then((d) => {
-        if (d.error) setError(d.error);
-        setExperiments(d.experiments ?? []);
-        setFacilities(d.facilities ?? []);
+        if (d.error) { setError(d.error); return; }
+        const exps = d.experiments ?? [];
+        const facs = d.facilities ?? [];
+        listCache = { experiments: exps, facilities: facs };
+        setExperiments(exps);
+        setFacilities(facs);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    if (!listCache) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function pick(code: string) {
-    const r = await fetch(`/api/experiments/${encodeURIComponent(code)}`);
-    const d = await r.json();
-    if (d.error) { setError(d.error); return; }
-    setSelected(d.experiment);
-    setDetail({ documents: d.documents ?? [], findings: d.findings ?? [] });
+    setDetailLoading(true);
+    try {
+      const r = await fetch(`/api/experiments/${encodeURIComponent(code)}`);
+      const d = await r.json();
+      if (d.error) { setError(d.error); return; }
+      setSelected(d.experiment);
+      setDetail({ documents: d.documents ?? [], findings: d.findings ?? [] });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDetailLoading(false);
+    }
   }
 
   // Deep link from search: open the named campaign once the list has loaded.
@@ -49,7 +79,17 @@ export default function Experiments({ focusRef }: { focusRef?: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRef, experiments.length]);
 
-  if (error) return <div className="card err">{error}</div>;
+  if (error) {
+    return (
+      <div className="grid" style={{ gap: 16 }}>
+        <ErrorState
+          title="Could not load experiments"
+          message={error}
+          onRetry={() => { listCache = null; load(); }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="grid" style={{ gap: 16 }}>
@@ -64,6 +104,11 @@ export default function Experiments({ focusRef }: { focusRef?: string }) {
       </div>
 
       <div className="grid g4">
+        {loading && experiments.length === 0 && (
+          <div style={{ gridColumn: "1 / -1" }}>
+            <SkeletonGrid count={6} />
+          </div>
+        )}
         {experiments.map((e) => (
           <div
             key={e.id}
@@ -88,10 +133,19 @@ export default function Experiments({ focusRef }: { focusRef?: string }) {
             </div>
           </div>
         ))}
-        {experiments.length === 0 && (
-          <div className="card muted">{t("No experiments loaded \u2014 check the database connection.")}</div>
+        {!loading && experiments.length === 0 && (
+          <div className="card" style={{ gridColumn: "1 / -1" }}>
+            <EmptyState
+              title={t("No experiments loaded \u2014 check the database connection.")}
+              sub={t("Retry, or confirm the backend is reachable at /api/health.")}
+            />
+          </div>
         )}
       </div>
+
+      {detailLoading && !selected && (
+        <Loading title={t("Loading campaign detail…")} rows={4} />
+      )}
 
       {selected && detail && (
         <div className="grid g2">

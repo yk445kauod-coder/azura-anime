@@ -254,3 +254,27 @@
     0 0 0 1px color-mix(in oklab, var(--ember) 30%, transparent),
     0 0 44px -8px color-mix(in oklab, var(--ember) 45%, transparent);
 }
+
+/*
+ * RTL tuning.
+ *
+ * Arabic script is cursive and has no case, so the wide letter-spacing the
+ * design system uses for Latin eyebrow labels reads as broken spacing once the
+ * direction flips. The `rtl:` Tailwind variant cannot reach these values, so
+ * they are neutralised here instead.
+ */
+[dir="rtl"] .tracking-\[0\.3em\],
+[dir="rtl"] .tracking-\[0\.25em\],
+[dir="rtl"] .tracking-\[0\.2em\],
+[dir="rtl"] .tracking-wider,
+[dir="rtl"] .tracking-widest {
+  letter-spacing: 0;
+}
+
+/* Latin-only readouts (numbers, code, NTRS ids) stay LTR inside Arabic text. */
+[dir="rtl"] .font-mono,
+[dir="rtl"] code,
+[dir="rtl"] pre,
+[dir="rtl"] .tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
