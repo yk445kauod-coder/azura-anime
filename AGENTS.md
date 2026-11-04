@@ -4,7 +4,7 @@ AI-powered dashboard over NASA NTRS combustion-in-microgravity literature.
 React + Vite frontend in `web/`, serverless backend in `workers/ignis-agent/`,
 Python pipeline in `pipeline/`, Neon Postgres for storage and retrieval.
 
-Live: https://ignis-1j3.pages.dev (Cloudflare Pages + Pages Function `/api/*` proxy
+Live: https://ignis-project.pages.dev (Cloudflare Pages + Pages Function `/api/*` proxy
 to the `ignis-agent` worker).
 
 ## Commands
@@ -27,7 +27,7 @@ skips DB-dependent tests when the database is unreachable.
 
 | Piece | Where | Notes |
 | --- | --- | --- |
-| Dashboard | Cloudflare Pages, project `ignis` → https://ignis-1j3.pages.dev | `web/dist`, SPA fallback via `web/public/_redirects` |
+| Dashboard | Cloudflare Pages, project `ignis-project` → https://ignis-project.pages.dev | `web/dist`, SPA fallback via `web/public/_redirects` |
 | API proxy | Pages Function `web/functions/api/[[path]].ts` | forwards `/api/<x>` to the worker's `/<x>`; streams SSE through |
 | Backend | Worker `ignis-agent` | hybrid retrieval, agent loop, `/report`, `/memory`; Neon over HTTP |
 | LLM gateway | Worker `ignis-gateway` | holds the upstream agentrouter.org key; `IGNIS_PROXY_TOKEN` gates callers |
@@ -230,11 +230,12 @@ Measured after this change: 5/5 non-extractive answers, 7-12s, confidence
 
 - Agent Worker: `cd workers/ignis-agent && npx wrangler deploy`.
 - Gateway Worker: `cd workers/ignis-gateway && npx wrangler deploy`.
-- Pages: the project is named **`ignis`** (not `ignis-1j3` — that is only the
-  `*.pages.dev` subdomain). `wrangler pages deploy` needs `CI=true` and the
-  project name, or it fails with "cannot be run in a non-interactive context"
-  while trying to prompt for a project:
-  `cd web && CI=true npx wrangler pages deploy dist --project-name=ignis --branch=main`.
+- Pages: the project is named **`ignis-project`** → https://ignis-project.pages.dev.
+  A second, older project named `ignis` (subdomain `ignis-1j3.pages.dev`) also
+  exists in the account; deploying to it is a no-op for the live site. Deploy with:
+  `cd web && CI=true npx wrangler pages deploy dist --project-name=ignis-project --branch=main`
+  (`--branch=main` is required, or the deployment lands on a preview URL instead
+  of the production subdomain).
 - The frontend proxies `/api/*` to the agent Worker via the `IGNIS_LIVE_URL`
   var in `web/wrangler.toml`.
 
@@ -273,6 +274,44 @@ worker and the Neon schema before trusting any of them, they drift.
 - **Extracted findings are candidates.** Every `finding` carries `evidence_quote`; show it.
 - **`stop_reason` decides whether an answer is complete.** `final_answer` and
   `forced_synthesis` are fine; `budget`, `deadline`, `parse_error`, `model_error` are not.
+
+## Frontend: design system and device budget
+
+The dashboard is a dark "mission control" theme — glass panels over an animated
+NASA Blue Marble backdrop, flame/amber accent (`--flame`), cyan for secondary
+data. Tokens live at the top of `web/src/globals.css`; every component reads
+them, so a theme change is one file.
+
+Three rules keep it fast on weak devices:
+
+- **Numbers must go through `web/src/lib/format.ts`.** Postgres `bigint`/`numeric`
+  reach the client over the Neon HTTP driver as *strings*, so `toLocaleString`,
+  `toFixed` and arithmetic silently render `—` or `NaN`. The worker also coerces
+  with `numify()` in `index.ts`, but the client helper is the safety net.
+- **WebGL is opt-in.** `web/src/lib/device.ts` gates on cores, memory, pointer
+  type and reduced-motion. `IssPanel` renders a static NASA PNG unless the device
+  qualifies; only then does it `import()` `IssViewer`, which pulls the isolated
+  `three` chunk (~305 kB gzip). `frameloop="demand"` plus a 24 fps `Pulse` keeps
+  the decorative rotation off the vsync budget, and it pauses when hidden.
+- **Canvas animations throttle and pause.** `FlameViz` draws at 20 fps and stops
+  on `visibilitychange`; the CSS earth rotation is disabled under reduced motion.
+
+Every non-default tab is a `React.lazy` chunk, so opening Mission Control never
+downloads the agent console or the report builder.
+
+### Vendored visual assets
+
+| File | Source | Licence |
+| --- | --- | --- |
+| `web/public/assets/iss.glb` | NASA 3D Resources, ISS (B) | public domain |
+| `web/public/assets/iss-preview.png` | NASA 3D Resources (downscaled 760px) | public domain |
+| `web/public/assets/earth-blue-marble.jpg` | three-globe example imagery (NASA Blue Marble) | public domain |
+| `web/public/assets/nasa-logo.svg` | Wikimedia Commons | public domain |
+
+The ISS model is untextured PBR, so `IssViewer` lights it with drei's `Stage`
+rather than expecting baked textures. Icons are inlined `[tag, attrs]` tuples in
+`web/src/components/Icon.tsx` (paths from Lucide, ISC) — no icon dependency, no
+CDN request at runtime.
 
 ### Credentials
 

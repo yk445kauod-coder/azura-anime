@@ -19,8 +19,20 @@ type AskResult = {
   run_id: string; question: string; answer: string; chart?: ChartPayload | null;
   claims: Claim[]; evidence: Hit[];
   sub_questions: string[]; confidence: number; grounded: boolean; iterations: number;
+  stop_reason?: string;
   trace: { node: string; [k: string]: unknown }[];
   latency_ms: number; provider: string; model: string;
+};
+
+// `stop_reason` is the contract for whether an answer is complete. Only these
+// two mean the loop finished the job; anything else is a partial result and the
+// UI has to say so rather than presenting it as final.
+const COMPLETE = new Set(["final_answer", "forced_synthesis"]);
+const STOP_LABEL: Record<string, string> = {
+  budget: "hit the iteration budget before finishing",
+  deadline: "ran out of time before finishing",
+  parse_error: "the model's output could not be parsed",
+  model_error: "the model call failed",
 };
 type Stage = { node: string; msg: string };
 
@@ -289,6 +301,11 @@ export default function Assistant() {
                 <span className={`dot ${result.grounded ? "" : "warn"}`} />
                 {result.grounded ? "grounded in sources" : "low grounding"}
               </span>
+              {result.stop_reason && !COMPLETE.has(result.stop_reason) && (
+                <span className="pill warnpill">
+                  partial · {STOP_LABEL[result.stop_reason] ?? result.stop_reason}
+                </span>
+              )}
               <span className="pill">confidence {(result.confidence * 100).toFixed(0)}%</span>
               <span className="pill">{result.claims.length} cited claims</span>
               <span className="pill">{result.evidence.length} passages</span>

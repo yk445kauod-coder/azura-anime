@@ -38,5 +38,19 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
+    // Warn only when a chunk is genuinely huge; the 3D chunk is expected to be
+    // large and is loaded on demand, so it must not drown the signal.
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          // Keep the WebGL stack in its own chunk so it is only ever fetched by
+          // devices that actually open the ISS panel.
+          if (id.includes("node_modules/three") || id.includes("@react-three")) return "three";
+          if (id.includes("node_modules/react")) return "react";
+          return undefined;
+        },
+      },
+    },
   },
 });

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "IGNIS \u2014 React dashboard for NASA microgravity combustion & spacecraft fire-safety research",
+  "description": "IGNIS — React dashboard for NASA microgravity combustion & spacecraft fire-safety research",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -12,13 +12,17 @@
     "i18n:sync": "python3 ../scripts/gen-locales.py"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "@types/three": "^0.187.0",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.3",
     "vite": "^6.0.7"

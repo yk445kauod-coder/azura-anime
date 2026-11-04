@@ -140,10 +140,14 @@ function stripFences(raw: string): string {
  * sentence or a broken JSON fragment is not mistaken for a final answer.
  */
 function looksLikeAnswer(text: string): boolean {
-  if (text.length < 200) return false;
-  if (/^\s*[\[{]/.test(text)) return false;
+  // A citation marker plus either a few lines or a reasonable length is enough
+  // evidence that this is prose and not a truncated tool call. The bar is
+  // deliberately low: a slightly short answer is far better than throwing the
+  // whole run away and falling back to an extractive dump.
+  if (!/\[\d+\]/.test(text)) return false;
+  if (/^\s*\{/.test(text)) return false;
   const lines = text.split("\n").filter((l) => l.trim()).length;
-  return lines >= 3 && /\[\d+\]/.test(text);
+  return lines >= 2 || text.length >= 120;
 }
 
 function extractJson(raw: string): any | null {
@@ -176,6 +180,27 @@ export function mentionedCodes(text: string, known: string[]): string[] {
   return found;
 }
 
+/**
+ * Repair the two ways a reasoning model's JSON object usually arrives broken:
+ * a fenced block, and an unterminated object whose `answer` string runs to the
+ * end of the text. Returns null when nothing usable can be recovered.
+ */
+function salvageJson(raw: string): any | null {
+  let s = raw.trim().replace(/^```(?:json|markdown|md)?\s*/, "").replace(/\s*```$/, "").trim();
+  const start = s.indexOf("{");
+  if (start === -1) return null;
+  s = s.slice(start);
+  const direct = extractJson(s);
+  if (direct) return direct;
+  // Unterminated object: pull the answer text out of the raw string.
+  const m = /"answer"\s*:\s*"([\s\S]*)$/.exec(s);
+  if (m) {
+    const answer = m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\t/g, " ").trim();
+    if (answer) return { tool: "final_answer", input: { answer } };
+  }
+  return null;
+}
+
 export async function runAgentLoop(
   question: string,
   deps: LoopDeps,
@@ -185,6 +210,13 @@ export async function runAgentLoop(
   const started = Date.now();
   const deadlineMs = deps.deadlineMs ?? 150000;
   const maxIterations = deps.maxIterations ?? 6;
+  // Split the budget: the loop may spend most of it gathering evidence, but the
+  // last slice is reserved so a forced-synthesis pass always has room to run.
+  // Without the reserve the loop can eat the entire deadline and the answer
+  // degrades to a raw evidence dump.
+  const SYNTH_RESERVE_MS = 45000;
+  const hardDeadline = started + deadlineMs;
+  const loopDeadline = started + Math.max(20000, deadlineMs - SYNTH_RESERVE_MS);
   const steps: LoopStep[] = [];
   const pool: LoopHit[] = [];
   const poolIds = new Set<number>();
@@ -210,45 +242,69 @@ export async function runAgentLoop(
   ];
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
-    const remaining = deadlineMs - (Date.now() - started);
+    const remaining = loopDeadline - Date.now();
     if (remaining < 12000) { stopReason = "deadline"; break; }
 
-    let parsed: any;
-    try {
-      const raw = await deps.chat(messages, {
-        maxTokens: 4000,
-        effort: "medium",
-        timeoutMs: Math.min(110000, remaining),
-      });
-      messages.push({ role: "assistant", content: raw });
-      const obj = extractJson(raw);
-      if (!obj || typeof obj !== "object") {
-        // Models sometimes ignore the JSON envelope and write the answer
-        // directly. That prose is still a usable answer, so keep it rather than
-        // discarding the whole run over a formatting slip.
-        const prose = stripFences(raw);
-        if (looksLikeAnswer(prose)) {
-          stopReason = "final_answer";
-          return {
-            answer: prose, steps, hits: pool, chartRequest, stopReason,
-            promptTokens, completionTokens, iterations: iteration + 1,
-          };
-        }
-        // Otherwise it is scratch work: ask again instead of aborting the run.
-        parseErrors++;
-        lastError = "model did not return a JSON object";
-        if (parseErrors >= 2) { stopReason = "parse_error"; break; }
-        messages.push({
-          role: "user",
-          content: "Reply with exactly one JSON object and nothing else — no prose, no code fences.",
+    // A transient upstream failure (timeout, one 5xx) must not kill the run:
+    // retry a couple of times before giving up, and treat the failure as a
+    // parse retry rather than an immediate hard stop. Each attempt re-reads the
+    // clock and shares one budget, so retries cannot push past the deadline.
+    let raw = "";
+    let chatErr: any = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const left = loopDeadline - Date.now();
+      if (left < 6000) { chatErr = new Error("deadline reached during retries"); break; }
+      try {
+        raw = await deps.chat(messages, {
+          maxTokens: 4000,
+          effort: "medium",
+          timeoutMs: Math.min(110000, left),
         });
-        continue;
+        chatErr = null;
+        break;
+      } catch (err: any) {
+        chatErr = err;
+        lastError = String(err?.message ?? err).slice(0, 300);
+        const msg = String(err?.message ?? err);
+        // A 400 "Unsupported parameter" is deterministic — retrying will not help.
+        if (/unsupported parameter|invalid request|400/i.test(msg)) break;
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
       }
-      parsed = obj;
-    } catch (err: any) {
-      stopReason = "model_error";
-      lastError = String(err?.message ?? err).slice(0, 300);
-      break;
+    }
+
+    if (chatErr) {
+      parseErrors++;
+      if (parseErrors >= 2) { stopReason = "model_error"; break; }
+      messages.push({
+        role: "user",
+        content: "The previous call failed. Reply with exactly one JSON object and nothing else.",
+      });
+      continue;
+    }
+
+    messages.push({ role: "assistant", content: raw });
+    let parsed: any = extractJson(raw) ?? salvageJson(raw);
+    if (!parsed || typeof parsed !== "object") {
+      // Models sometimes ignore the JSON envelope and write the answer
+      // directly. That prose is still a usable answer, so keep it rather than
+      // discarding the whole run over a formatting slip.
+      const prose = stripFences(raw);
+      if (looksLikeAnswer(prose)) {
+        stopReason = "final_answer";
+        return {
+          answer: prose, steps, hits: pool, chartRequest, stopReason,
+          promptTokens, completionTokens, iterations: iteration + 1,
+        };
+      }
+      // Otherwise it is scratch work: ask again instead of aborting the run.
+      parseErrors++;
+      lastError = "model did not return a JSON object";
+      if (parseErrors >= 3) { stopReason = "parse_error"; break; }
+      messages.push({
+        role: "user",
+        content: "Reply with exactly one JSON object and nothing else — no prose, no code fences.",
+      });
+      continue;
     }
 
     const thought = String(parsed.thought ?? "").slice(0, 400);
@@ -292,44 +348,75 @@ export async function runAgentLoop(
   }
 
   // The loop ran out of iterations or time without a final answer. A raw
-  // evidence dump is not an answer, so spend one more call synthesizing the
-  // passages already gathered into the structured response.
+  // evidence dump is not an answer, so spend one more call — retried once with
+  // a larger budget — turning the gathered passages into the structured
+  // response. Only if every attempt fails do we fall back to the deterministic
+  // extractive answer, which is grounded by construction.
   if (pool.length) {
-    const remaining = Math.max(20000, Math.min(90000, deadlineMs - (Date.now() - started)));
-    try {
-      const raw = await deps.chat(
-        [
-          { role: "system", content: FINAL_ANSWER_INSTRUCTION },
-          {
-            role: "user",
-            content: `Research question: ${question}\n\nEvidence:\n${evidenceBlock(pool)}\n\nWrite the final answer now.`,
-          },
-        ],
-        { maxTokens: 4000, effort: "medium", timeoutMs: remaining },
-      );
-      // The forced pass is asked for prose, but tolerate a JSON envelope.
-      const obj = extractJson(raw);
-      const answer = String(
-        obj && typeof obj.answer === "string" && obj.answer.trim() ? obj.answer : raw,
-      ).replace(/^```(?:markdown|md)?\s*/, "").replace(/\s*```$/, "").trim();
-      if (answer) {
-        return {
-          answer, steps, hits: pool, chartRequest, stopReason: "forced_synthesis",
-          promptTokens, completionTokens, iterations: steps.length,
-        };
+    const budgets = [4000, 8000];
+    for (const budget of budgets) {
+      const remaining = hardDeadline - Date.now();
+      // This pass exists to rescue a run that ran out of loop time, so it must
+      // actually be allowed to run: stop only when the hard deadline is close.
+      if (remaining < 12000) break;
+      try {
+        const raw = await deps.chat(
+          [
+            { role: "system", content: FINAL_ANSWER_INSTRUCTION },
+            {
+              role: "user",
+              content: `Research question: ${question}\n\nEvidence:\n${evidenceBlock(pool)}\n\nWrite the final answer now.`,
+            },
+          ],
+          { maxTokens: budget, effort: "medium", timeoutMs: Math.min(110000, remaining) },
+        );
+        // The forced pass is asked for prose, but tolerate a JSON envelope or an
+        // unterminated one.
+        const obj = extractJson(raw) ?? salvageJson(raw);
+        const answer = String(
+          obj && typeof obj.answer === "string" && obj.answer.trim() ? obj.answer : raw,
+        ).replace(/^```(?:markdown|md)?\s*/, "").replace(/\s*```$/, "").trim();
+        if (answer && answer.length > 40) {
+          return {
+            answer, steps, hits: pool, chartRequest, stopReason: "forced_synthesis",
+            promptTokens, completionTokens, iterations: steps.length,
+          };
+        }
+      } catch (err: any) {
+        lastError = String(err?.message ?? err).slice(0, 300);
       }
-    } catch (err: any) {
-      lastError = String(err?.message ?? err).slice(0, 300);
     }
   }
 
   return {
     answer: pool.length
-      ? `No synthesis was reached for: ${question}`
+      ? extractiveAnswer(question, pool)
       : `No evidence was retrieved for: ${question}`,
     steps, hits: pool, chartRequest, stopReason,
     promptTokens, completionTokens, iterations: steps.length, lastError,
   };
+}
+
+/**
+ * Last-resort answer assembled directly from the retrieved passages.
+ *
+ * Unlike the old "No synthesis was reached" placeholder, this is a real answer:
+ * it quotes the evidence with `[n]` markers that resolve to the same passages,
+ * so it is grounded, citable and useful even when the model never cooperated.
+ */
+function extractiveAnswer(question: string, hits: LoopHit[]): string {
+  const top = hits.slice(0, 5);
+  const lines = top.map((h, i) => {
+    const text = h.content.replace(/\s+/g, " ").trim().slice(0, 260);
+    return `- **${h.title}** (NTRS ${h.source_id}) — ${text} [${i + 1}]`;
+  });
+  return (
+    `## ${question}\n\n` +
+    `The agent gathered the following directly relevant passages from the NASA corpus. ` +
+    `They are quoted verbatim; the model did not get to synthesise them, so read them as evidence rather than a finished summary.\n\n` +
+    lines.join("\n") +
+    `\n\n_Each bullet cites the passage it was drawn from; open the source documents for full context._`
+  );
 }
 
 async function resolveTool(

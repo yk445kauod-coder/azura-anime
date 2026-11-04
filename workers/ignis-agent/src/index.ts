@@ -128,6 +128,33 @@ function json(obj: any, status = 200): Response {
   });
 }
 
+/**
+ * Coerce the named columns of a row set from string to number.
+ *
+ * Postgres `bigint`/`numeric` come back over the Neon HTTP driver as strings
+ * (`"206"`, `"0.8809"`), which breaks `toLocaleString`/`toFixed`/arithmetic on
+ * the client and renders real data as a dash. Only explicitly listed keys are
+ * touched — ids and source ids must stay strings to preserve leading zeros.
+ */
+function numify<T extends Record<string, any>>(rows: T[], keys: string[]): T[] {
+  const kset = new Set(keys);
+  return rows.map((row) => {
+    const out: Record<string, any> = { ...row };
+    for (const k of Object.keys(out)) {
+      if (!kset.has(k)) continue;
+      const v = out[k];
+      if (v !== null && v !== undefined && v !== "" && !Number.isNaN(Number(v))) out[k] = Number(v);
+    }
+    return out as T;
+  });
+}
+
+/** Same coercion for a single object (e.g. the document_stats row). */
+function numifyOne<T extends Record<string, any>>(row: T | undefined, keys: string[]): T {
+  if (!row) return {} as T;
+  return numify([row], keys)[0];
+}
+
 async function hybridSearch(env: Env, question: string, qvec: number[],
                             k: number, pool: number): Promise<Hit[]> {
   const sql = db(env);
@@ -991,10 +1018,17 @@ async function runAgentic(
     if (written) step("memory_write", { n_claims: written });
   } catch { /* best-effort */ }
 
-  // Confidence blends the model's own stopping quality with how many claims the
-  // corpus actually supports; the verified share dominates because it is measured.
-  const modelConfidence = loop.stopReason === "final_answer" ? 0.7 : 0.3;
-  const confidence = Math.round(Math.min(0.95, 0.45 * modelConfidence + 0.55 * verifiedRatio) * 1000) / 1000;
+  // Confidence blends how the loop stopped with how many claims the corpus
+  // actually supports. The verified share dominates because it is measured, not
+  // asserted; a forced or budget synthesis is still a real answer, so it is not
+  // penalised to near-zero the way a hard failure would be.
+  const modelConfidence =
+    loop.stopReason === "final_answer" ? 0.85 :
+    loop.stopReason === "forced_synthesis" ? 0.7 :
+    loop.stopReason === "budget" ? 0.55 :
+    loop.stopReason === "deadline" ? 0.45 :
+    0.3;
+  const confidence = Math.round(Math.min(0.95, 0.35 * modelConfidence + 0.65 * verifiedRatio) * 1000) / 1000;
 
   const result = {
     run_id: runId,
@@ -1628,7 +1662,11 @@ export default {
           backend: "live-worker",
           server_time: new Date().toISOString(),
           latency_ms: Date.now() - started,
-          stats: rows[0] ?? {},
+          stats: numifyOne(rows[0], [
+            "documents", "documents_with_fulltext", "chunks", "embeddings",
+            "experiments", "findings", "insights", "corpus_words", "corpus_chars",
+            "artifact_bytes",
+          ]),
         });
       } catch (err: any) {
         return json(
@@ -1673,7 +1711,18 @@ export default {
           sql`SELECT metric, count(*)::int AS n, round(min(value)::numeric,3) AS min_value, round(max(value)::numeric,3) AS max_value, mode() WITHIN GROUP (ORDER BY unit) AS unit FROM ignis.finding WHERE value IS NOT NULL GROUP BY metric HAVING count(*) >= 2 ORDER BY n DESC LIMIT 12`,
           sql`SELECT stage, status, items_in, items_out, bytes_in, started_at, finished_at FROM ignis.pipeline_run ORDER BY id DESC LIMIT 10`,
         ]);
-        return json({ stats: stats[0] ?? {}, byKind, byYear, topDocs, topMetrics, pipeline });
+        return json({
+          stats: numifyOne(stats[0], [
+            "documents", "documents_with_fulltext", "chunks", "embeddings",
+            "experiments", "findings", "insights", "corpus_words", "corpus_chars",
+            "artifact_bytes",
+          ]),
+          byKind: numify(byKind, ["n"]),
+          byYear: numify(byYear, ["year", "n"]),
+          topDocs: numify(topDocs, ["word_count", "quality_score", "chunks"]),
+          topMetrics: numify(topMetrics, ["n", "min_value", "max_value"]),
+          pipeline: numify(pipeline, ["items_in", "items_out", "bytes_in"]),
+        });
       }
       if (request.method === "GET" && url.pathname === "/experiments") {
         const sql = db(env);
@@ -1681,7 +1730,10 @@ export default {
           sql`SELECT e.id, e.code, e.name, e.campaign, e.status, e.gravity_level, e.fuel_type, e.ambient_gas, e.o2_fraction, e.pressure_kpa, e.objective, e.summary, e.aliases, f.code AS facility, f.name AS facility_name, f.platform, (SELECT count(*)::int FROM ignis.experiment_document ed WHERE ed.experiment_id = e.id) AS documents, (SELECT count(*)::int FROM ignis.finding fi WHERE fi.experiment_id = e.id) AS findings FROM ignis.experiment e LEFT JOIN ignis.facility f ON f.id = e.facility_id ORDER BY documents DESC, e.code`,
           sql`SELECT f.id, f.code, f.name, f.platform, f.agency, f.g_level, f.description, (SELECT count(*)::int FROM ignis.experiment e WHERE e.facility_id = f.id) AS experiments FROM ignis.facility f ORDER BY f.code`,
         ]);
-        return json({ experiments, facilities });
+        return json({
+          experiments: numify(experiments, ["o2_fraction", "pressure_kpa", "documents", "findings"]),
+          facilities: numify(facilities, ["experiments"]),
+        });
       }
       if (request.method === "GET" && url.pathname === "/insights") {
         const sql = db(env);
@@ -1690,7 +1742,11 @@ export default {
           sql`SELECT metric, count(*)::int AS n, round(min(value)::numeric,3) AS min_value, round(max(value)::numeric,3) AS max_value, round(avg(value)::numeric,3) AS avg_value, mode() WITHIN GROUP (ORDER BY unit) AS unit FROM ignis.finding WHERE value IS NOT NULL GROUP BY metric HAVING count(*) >= 2 ORDER BY n DESC`,
           sql`SELECT e.code, e.name, e.campaign, count(DISTINCT ed.document_id)::int AS documents FROM ignis.experiment e LEFT JOIN ignis.experiment_document ed ON ed.experiment_id = e.id GROUP BY e.code, e.name, e.campaign ORDER BY documents ASC`,
         ]);
-        return json({ insights, metrics, coverage });
+        return json({
+          insights: numify(insights, ["confidence"]),
+          metrics: numify(metrics, ["n", "min_value", "max_value", "avg_value"]),
+          coverage: numify(coverage, ["documents"]),
+        });
       }
       if (request.method === "GET" && url.pathname === "/documents") {
         const sql = db(env);
@@ -1718,7 +1774,10 @@ export default {
              AND (${experiment}::text IS NULL OR EXISTS (
                    SELECT 1 FROM ignis.experiment_document ed JOIN ignis.experiment e ON e.id = ed.experiment_id
                     WHERE ed.document_id = d.id AND (lower(e.code) = lower(${experiment}) OR ${experiment} = ANY(e.aliases))))`;
-        return json({ documents: rows, total: total[0]?.n ?? 0, limit, offset });
+        return json({
+          documents: numify(rows, ["word_count", "quality_score", "chunks"]),
+          total: Number(total[0]?.n ?? 0), limit, offset,
+        });
       }
       const expMatch = url.pathname.match(/^\/experiments\/([^/]+)$/);
       if (request.method === "GET" && expMatch) {
@@ -1729,7 +1788,11 @@ export default {
         const experiment = rows[0];
         const documents: any[] = await sql`SELECT d.id, d.source_id, d.title, d.kind, d.published_date, d.word_count, d.quality_score, d.landing_url, ed.relation FROM ignis.experiment_document ed JOIN ignis.document d ON d.id = ed.document_id WHERE ed.experiment_id = ${experiment.id} ORDER BY d.quality_score DESC NULLS LAST LIMIT 50`;
         const findings: any[] = await sql`SELECT f.id, f.metric, f.value, f.value_max, f.unit, f.statement, f.confidence, f.evidence_quote, f.document_id FROM ignis.finding f JOIN ignis.experiment_document ed ON ed.document_id = f.document_id WHERE ed.experiment_id = ${experiment.id} ORDER BY f.metric, f.value LIMIT 200`;
-        return json({ experiment, documents, findings });
+        return json({
+          experiment: numifyOne(experiment, ["o2_fraction", "pressure_kpa", "documents", "findings"]),
+          documents: numify(documents, ["word_count", "quality_score"]),
+          findings: numify(findings, ["value", "value_max", "confidence"]),
+        });
       }
 
       const docMatch = url.pathname.match(/^\/documents\/([^/]+)$/);
@@ -1742,7 +1805,12 @@ export default {
         const chunks: any[] = await sql`SELECT c.id, c.ordinal, c.kind, c.section_path, c.token_count, left(c.content, 600) AS preview, EXISTS (SELECT 1 FROM ignis.chunk_embedding e WHERE e.chunk_id = c.id) AS embedded FROM ignis.chunk c WHERE c.document_id = ${documentId} ORDER BY c.ordinal`;
         const findings: any[] = await sql`SELECT id, metric, value, value_max, unit, statement, confidence, evidence_quote FROM ignis.finding WHERE document_id = ${documentId} ORDER BY metric LIMIT 100`;
         const experiments: any[] = await sql`SELECT e.code, e.name, ed.relation FROM ignis.experiment_document ed JOIN ignis.experiment e ON e.id = ed.experiment_id WHERE ed.document_id = ${documentId}`;
-        return json({ document: docs[0], chunks, findings, experiments });
+        return json({
+          document: numifyOne(docs[0], ["word_count", "char_count", "quality_score"]),
+          chunks: numify(chunks, ["ordinal", "token_count"]),
+          findings: numify(findings, ["value", "value_max", "confidence"]),
+          experiments,
+        });
       }
 
       if (request.method === "GET" && url.pathname === "/datasets") {
@@ -1754,7 +1822,13 @@ export default {
             FROM ignis.dataset
            ORDER BY value_count DESC, name`;
         const total = rows.reduce((n: number, r: any) => n + Number(r.value_count ?? 0), 0);
-        return json({ datasets: rows, total_measurements: total });
+        return json({
+          datasets: numify(rows, [
+            "value_count", "document_count", "recorded_unit_count",
+            "value_min", "value_max", "ranged_value_count", "mean_confidence",
+          ]),
+          total_measurements: total,
+        });
       }
 
       const dsMatch = url.pathname.match(/^\/datasets\/([^/]+)$/);
@@ -1786,7 +1860,15 @@ export default {
           WITH b AS (SELECT width_bucket(value, min(value) OVER (), max(value) OVER (), 10) AS bucket, value FROM ignis.dataset_row WHERE dataset_key = ${key})
           SELECT bucket, count(*)::int AS n, round(min(value)::numeric,4) AS lo, round(max(value)::numeric,4) AS hi
             FROM b GROUP BY bucket ORDER BY bucket`;
-        return json({ dataset: meta[0], rows, stats: stats[0] ?? {}, histogram });
+        return json({
+          dataset: numifyOne(meta[0], [
+            "value_count", "document_count", "recorded_unit_count",
+            "value_min", "value_max", "ranged_value_count", "mean_confidence",
+          ]),
+          rows: numify(rows, ["value", "raw_value", "value_max", "confidence"]),
+          stats: numifyOne(stats[0], ["n", "min_value", "max_value", "mean_value", "sd_value", "median_value"]),
+          histogram: numify(histogram, ["bucket", "n", "lo", "hi"]),
+        });
       }
 
       if (request.method === "GET" && url.pathname === "/global-search") {
