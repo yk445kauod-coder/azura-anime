@@ -206,6 +206,28 @@ the next step (see HANDOFF.md).
 harvester). Its `/ask` and `/ask-sync` endpoints run
 `plan → retrieve → grade → expand → synthesize → verify`.
 
+### The agentic loop must not use the deep model in fast mode
+
+`runAgentic` used to ignore `mode` and always use `IGNIS_DEEP_MODEL`
+(`gpt-6-astra`). Each upstream completion on that model costs ~60-90s, so a
+multi-turn loop could not reach synthesis inside its 150s deadline: it ended
+`stop_reason: deadline` at ~151s and shipped the extractive dump (the
+"gathered the following directly relevant passages" answer, ~0.80 confidence).
+Fast mode now uses `IGNIS_FAST_MODEL` (`gpt-5.6-sol`), which completes a call in
+~35s, so a run reaches `forced_synthesis` in 37-105s at confidence ~0.90.
+
+Two supporting changes make the deadline reachable: the loop pre-seeds the
+evidence pool with one local retrieval (retrieval is <1s) and skips the loop
+entirely when the seed is already sufficient, and forced synthesis uses the same
+output budgets as the fixed pipeline (`[4000, 8000]`). A reasoning model needs
+~4000 output tokens before it stops spending the cap on hidden reasoning; a
+smaller cap returns empty content, which is how a run silently degrades to the
+extractive answer.
+
+Recalled memory is passed to the loop as `deps.context`, not concatenated onto
+the question string. Concatenating it made the model echo the memory preamble
+into the answer heading.
+
 The default model, `gpt-5.6-sol`, is a **reasoning model**. It spends its
 `max_tokens` budget on hidden reasoning before emitting any text, so:
 
