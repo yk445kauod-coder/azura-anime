@@ -937,7 +937,12 @@ async function runAgentic(
     emit(node, data);
   };
 
-  const usedModel = model || env.IGNIS_DEEP_MODEL || "gpt-6-astra";
+  // Fast mode uses the fast model: the agentic loop makes several sequential
+  // calls, and the deep model's per-call latency is high enough that a run
+  // cannot reach synthesis inside the deadline.
+  const usedModel = model ||
+    (mode === "deep" ? (env.IGNIS_DEEP_MODEL || "gpt-6-astra")
+                     : (env.IGNIS_FAST_MODEL || "gpt-5.6-sol"));
   const maxIterations = mode === "deep" ? 8 : 5;
   const deadlineMs = mode === "deep" ? 210000 : 150000;
 
@@ -958,11 +963,12 @@ async function runAgentic(
   const known = await knownExperimentCodes(env).catch(() => [] as string[]);
 
   const loop = await runAgentLoop(
-    question + memoryBlock,
+    question,
     {
       model: usedModel,
       deadlineMs,
       maxIterations,
+      context: memoryBlock.trim() || undefined,
       search: (q, kk) => retrieveGraded(env, q, kk),
       recall: async (q, kk) => (await memoryRecall(env, q, kk, conversationId)) as any,
       compare: (codes, topic) => compareExperiments(env, codes, topic),

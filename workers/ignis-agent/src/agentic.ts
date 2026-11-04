@@ -77,6 +77,11 @@ export type LoopDeps = {
   /** Wall-clock budget for the whole loop. */
   deadlineMs?: number;
   maxIterations?: number;
+  /**
+   * Background context prepended to the loop's first user turn, kept separate
+   * from the question itself so it never leaks into the answer's heading.
+   */
+  context?: string;
 };
 
 const SYSTEM = `You are IGNIS, an agentic scientific research analyst for NASA microgravity combustion and spacecraft fire safety. You answer only from evidence you retrieve with your tools.
@@ -213,8 +218,9 @@ export async function runAgentLoop(
   // Split the budget: the loop may spend most of it gathering evidence, but the
   // last slice is reserved so a forced-synthesis pass always has room to run.
   // Without the reserve the loop can eat the entire deadline and the answer
-  // degrades to a raw evidence dump.
-  const SYNTH_RESERVE_MS = 45000;
+  // degrades to a raw evidence dump. The reserve is generous because a single
+  // synthesis call on a reasoning model routinely runs 40-60s.
+  const SYNTH_RESERVE_MS = 60000;
   const hardDeadline = started + deadlineMs;
   const loopDeadline = started + Math.max(20000, deadlineMs - SYNTH_RESERVE_MS);
   const steps: LoopStep[] = [];
@@ -230,18 +236,43 @@ export async function runAgentLoop(
 
   const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
     { role: "system", content: SYSTEM },
-    {
+  ];
+
+  // Seed the pool with a first-pass retrieval before the loop starts. Each
+  // upstream completion costs 25-30s, so a loop that spends its opening turns
+  // searching rarely reaches synthesis inside the deadline. Retrieval is local
+  // and fast, so doing it up front lets the model answer on turn one when the
+  // seed is already sufficient, while still allowing further searches.
+  try {
+    const seed = await deps.search(question, 5);
+    for (const h of seed) {
+      if (!poolIds.has(h.chunk_id)) { pool.push(h); poolIds.add(h.chunk_id); }
+    }
+    triedQueries.push(question);
+  } catch (err: any) {
+    lastError = String(err?.message ?? err).slice(0, 300);
+  }
+
+  // When the opening retrieval is already substantial, go straight to
+  // synthesis. Upstream completions cost ~60s each, so spending a turn asking
+  // the model to decide whether to search again is unaffordable — and a seeded
+  // prompt that invites a JSON `final_answer` makes the model try to write the
+  // whole answer inside a small JSON field, which truncates and wastes the run.
+  const seedSufficient = pool.length >= 4;
+  if (!seedSufficient) {
+    messages.push({
       role: "user",
       content:
+        (deps.context ? `${deps.context}\n\n` : "") +
         `Research question: ${question}\n\n` +
         (knownExperiments.length
           ? `Experiment codes you may pass to compare_experiments: ${knownExperiments.slice(0, 40).join(", ")}\n\n`
           : "") +
         "Start by choosing a tool. Reply with one JSON object.",
-    },
-  ];
+    });
+  }
 
-  for (let iteration = 0; iteration < maxIterations; iteration++) {
+  for (let iteration = 0; !seedSufficient && iteration < maxIterations; iteration++) {
     const remaining = loopDeadline - Date.now();
     if (remaining < 12000) { stopReason = "deadline"; break; }
 
@@ -255,9 +286,13 @@ export async function runAgentLoop(
       const left = loopDeadline - Date.now();
       if (left < 6000) { chatErr = new Error("deadline reached during retries"); break; }
       try {
+        // Tool selection only needs a small JSON object back, so it runs at low
+        // effort with a modest token budget. Medium effort made each turn take
+        // 30-45s, which left room for barely two iterations inside the deadline
+        // and pushed the run to `stop_reason: deadline` before it could answer.
         raw = await deps.chat(messages, {
-          maxTokens: 4000,
-          effort: "medium",
+          maxTokens: 1500,
+          effort: "low",
           timeoutMs: Math.min(110000, left),
         });
         chatErr = null;
@@ -353,6 +388,10 @@ export async function runAgentLoop(
   // response. Only if every attempt fails do we fall back to the deterministic
   // extractive answer, which is grounded by construction.
   if (pool.length) {
+    // Match the budgets the fixed pipeline uses: a reasoning model on this
+    // upstream needs ~4000 output tokens before it stops spending the budget on
+    // hidden reasoning and emits visible text. Smaller caps come back empty,
+    // which is how a run silently degrades to the extractive dump.
     const budgets = [4000, 8000];
     for (const budget of budgets) {
       const remaining = hardDeadline - Date.now();
@@ -368,7 +407,7 @@ export async function runAgentLoop(
               content: `Research question: ${question}\n\nEvidence:\n${evidenceBlock(pool)}\n\nWrite the final answer now.`,
             },
           ],
-          { maxTokens: budget, effort: "medium", timeoutMs: Math.min(110000, remaining) },
+          { maxTokens: budget, effort: "low", timeoutMs: Math.min(90000, remaining) },
         );
         // The forced pass is asked for prose, but tolerate a JSON envelope or an
         // unterminated one.
