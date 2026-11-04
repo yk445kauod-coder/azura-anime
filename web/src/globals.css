@@ -170,6 +170,25 @@ html, body {
   background-attachment: fixed;
 }
 
+/* Starfield behind everything. A fixed pseudo-element keeps it off the
+   scrolling layer so a long page never re-rasterises it. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.55;
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, #fff, transparent),
+    radial-gradient(1px 1px at 78% 32%, #cfe6ff, transparent),
+    radial-gradient(1.5px 1.5px at 44% 72%, #fff, transparent),
+    radial-gradient(1px 1px at 91% 84%, #ffd9b8, transparent),
+    radial-gradient(1px 1px at 27% 54%, #fff, transparent),
+    radial-gradient(1px 1px at 63% 9%, #fff, transparent);
+  background-size: 520px 520px;
+}
+
 h1, h2, h3, h4 { font-family: var(--font-head); margin: 0; letter-spacing: -0.2px; }
 a { color: var(--cyan); text-decoration: none; }
 a:hover { text-decoration: underline; }
