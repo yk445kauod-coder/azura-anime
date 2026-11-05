@@ -296,6 +296,18 @@ worker and the Neon schema before trusting any of them, they drift.
 - **Extracted findings are candidates.** Every `finding` carries `evidence_quote`; show it.
 - **`stop_reason` decides whether an answer is complete.** `final_answer` and
   `forced_synthesis` are fine; `budget`, `deadline`, `parse_error`, `model_error` are not.
+- **`/api/stats` `topMetrics` must not be truncated below the metric count.** The corpus
+  has 14 distinct metrics, and the Mission Control telemetry looks up `spread`,
+  `temperature` and `pressure` by name — `ORDER BY n DESC LIMIT 12` silently dropped
+  low-`n` headline metrics (flame spread rate) and rendered them as `—`. Keep the limit
+  ≥ the metric cardinality (the query uses `LIMIT 40`).
+- **Arabic is covered by the generated bundle.** `web/src/lib/locales.generated.ts`
+  `"ar"` should stay at ~239 entries; `scripts/refill-arabic.py` (chunked, with a browser
+  UA header) re-fills gaps. `NTRS` is intentionally left untranslated.
+- **`web:deploy` depends on `web/wrangler.toml` for the Pages project name.**
+  `npm run web:deploy` runs `wrangler pages deploy dist --branch=main` from `web/`, where
+  `wrangler.toml` sets `name = "ignis-project"`. Never pass `--project-name=ignis`
+  (that is a different, non-production Pages project); the toml is the single source of truth.
 
 ## Frontend: design system and device budget
 

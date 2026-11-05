@@ -9,7 +9,7 @@
     "web:build": "npm --prefix web run build",
     "web:preview": "npm --prefix web run preview",
     "web:typecheck": "npm --prefix web run typecheck",
-    "web:deploy": "npm --prefix web run build && (cd web && npx wrangler pages deploy dist --project-name=ignis --branch=main)",
+    "web:deploy": "npm --prefix web run build && cd web && npx wrangler pages deploy dist --branch=main",
     "worker:deploy": "npm --prefix workers/ignis-agent run deploy",
     "db:migrate": "python3 pipeline/migrate.py",
     "pipeline:collect": "python3 pipeline/collect.py",
