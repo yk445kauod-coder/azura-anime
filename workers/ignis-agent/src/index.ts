@@ -20,6 +20,7 @@ import { neon } from "@neondatabase/serverless";
 import { markdownToPdf, markdownToDocx, safeFilename, type ChartSpec } from "./export";
 import { renderSvg } from "./viz";
 import { runAgentLoop } from "./agentic";
+import { COUNCIL_MEMBERS, runCouncil } from "./council";
 
 interface Env {
   AI: any;
@@ -2203,6 +2204,67 @@ export default {
       } catch (err: any) {
         return json({ error: String(err?.message ?? err) }, 500);
       }
+    }
+
+    if (request.method === "POST" && url.pathname === "/council") {
+      let cbody: any = {};
+      try { cbody = await request.json(); } catch { /* ignore */ }
+      const question = String(cbody.question ?? "").trim();
+      if (!question) {
+        return json({ error: "missing question" }, 400);
+      }
+      const councilModel = typeof cbody.model === "string" && cbody.model
+        ? cbody.model : (env.IGNIS_FAST_MODEL || "gpt-5.6-sol");
+      const conversationId = typeof cbody.conversation_id === "string" && cbody.conversation_id
+        ? cbody.conversation_id : undefined;
+      const started = Date.now();
+
+      const stream = cbody.stream !== false;
+      const run = async (emit: (e: string, d: any) => void) => {
+        emit("convene", { question, model: councilModel, members: COUNCIL_MEMBERS });
+        try {
+          const result = await runCouncil(question, {
+            model: councilModel,
+            search: (q, kk) => retrieveGraded(env, q, kk),
+            chat: (messages, opts) => llmChat(env, messages, councilModel, opts),
+          });
+          for (let i = 0; i < result.members.length; i++) {
+            emit("member", { index: i, ...result.members[i] });
+          }
+          emit("verdict", { verdict: result.verdict, latency_ms: result.latency_ms,
+              evidence: result.evidence.map((h) => ({
+                title: h.title, source_id: h.source_id,
+                section_path: h.section_path ?? null, content: h.content.slice(0, 420),
+                landing_url: h.landing_url,
+              })) });
+          if (conversationId) {
+            try {
+              const sql = db(env);
+              await sql`INSERT INTO ignis.conversation (id, title, mode)
+                        VALUES (${conversationId}::uuid, ${question.slice(0, 120)}, 'council')
+                        ON CONFLICT (id) DO UPDATE SET updated_at = now()`;
+              await sql`INSERT INTO ignis.message (conversation_id, role, content)
+                        VALUES (${conversationId}::uuid, 'user', ${question})`;
+              await sql`INSERT INTO ignis.message (conversation_id, role, content, latency_ms)
+                        VALUES (${conversationId}::uuid, 'assistant',
+                                ${JSON.stringify(result.verdict)},
+                                ${Number(result.latency_ms ?? 0)})`;
+            } catch (err: any) {
+              console.error(`council persist: ${String(err?.message ?? err).slice(0, 160)}`);
+            }
+          }
+        } catch (err: any) {
+          emit("error", { error: String(err?.message ?? err) });
+        }
+        emit("done", { latency_ms: Date.now() - started });
+      };
+
+      if (stream) return sseResponse(run);
+      // Non-streaming: still call the same runner, swallow the SSE events.
+      return new Promise<Response>((resolve) => {
+        const holder: any = {};
+        run((e, d) => { if (e === "done") holder.done = d; }).then(() => resolve(json(holder.done || { error: "council failed" })));
+      });
     }
 
     if (request.method !== "POST" || (url.pathname !== "/ask" && url.pathname !== "/ask-sync")) {

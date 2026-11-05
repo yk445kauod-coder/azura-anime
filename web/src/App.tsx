@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Flame, Home, Database, BarChart3, Sparkles, FileText, Satellite,
-  Rocket, Gauge,
+  Rocket, Gauge, Scale,
 } from "lucide-react";
 
 import MissionControl from "@/components/MissionControl";
@@ -19,6 +19,7 @@ const Compare = lazy(() => import("@/components/Compare"));
 const Insights = lazy(() => import("@/components/Insights"));
 const Reports = lazy(() => import("@/components/Reports"));
 const SmartRanking = lazy(() => import("@/components/SmartRanking"));
+const Council = lazy(() => import("@/components/Council"));
 
 export type Health = {
   status: string;
@@ -36,6 +37,7 @@ const NAV_OPERATIONS = [
 
 const NAV_SCIENCE = [
   { id: "data", label: "Data Explorer", icon: BarChart3 },
+  { id: "council", label: "Judgment Council", icon: Scale },
   { id: "intel", label: "IGNIS Intelligence", icon: Sparkles },
   { id: "rank", label: "Smart Ranking", icon: Gauge },
   { id: "publications", label: "Publications", icon: FileText },
@@ -44,11 +46,11 @@ const NAV_SCIENCE = [
 ] as const;
 
 type ViewId =
-  | "mission" | "flame" | "reports" | "data" | "intel" | "rank"
+  | "mission" | "flame" | "reports" | "data" | "council" | "intel" | "rank"
   | "publications" | "compare" | "insights";
 
 const VALID_VIEWS: readonly string[] = [
-  "mission", "flame", "reports", "data", "intel", "rank", "publications", "compare", "insights",
+  "mission", "flame", "reports", "data", "council", "intel", "rank", "publications", "compare", "insights",
 ];
 
 function MissionClock() {
@@ -246,6 +248,7 @@ export default function App() {
             {view !== "mission" && (
               <Suspense fallback={<PanelFallback />}>
                 {view === "intel" && <Assistant />}
+                {view === "council" && <Council />}
                 {view === "publications" && <Explorer focusRef={focusRef} />}
                 {view === "flame" && <Experiments focusRef={focusRef} />}
                 {view === "data" && <DataExplorer focusKey={focusRef} />}
