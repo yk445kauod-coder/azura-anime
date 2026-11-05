@@ -7,7 +7,7 @@ import {
 
 import { useI18n } from "@/lib/i18n";
 import { postSse } from "@/lib/sse";
-import { fmtInt, n } from "@/lib/format";
+import { fmtInt, fmtNum, n } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Health } from "@/App";
 
@@ -299,14 +299,14 @@ export default function MissionControl({
               <Telemetry
                 icon={<TrendingUp className="size-4 text-ember" />}
                 label={t("Flame Spread Rate")}
-                value={spread ? `${spread.max_value} ${spread.unit ?? ""}`.trim() : "—"}
+                value={spread ? `${fmtNum(spread.max_value, 3)} ${spread.unit ?? "mm/s"}`.trim() : "—"}
                 delta={`n=${fmtInt(spread?.n)}`}
                 tone="up"
               />
               <Telemetry
                 icon={<Thermometer className="size-4 text-telemetry" />}
                 label={t("Flame Temperature")}
-                value={temp ? `${fmtInt(temp.max_value)} ${temp.unit ?? "K"}`.trim() : "—"}
+                value={temp ? `${fmtNum(temp.max_value, 1)} ${temp.unit ?? "K"}`.trim() : "—"}
                 delta={`n=${fmtInt(temp?.n)}`}
                 tone="up"
               />

@@ -623,6 +623,15 @@ td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-
   from { background-position: 0 50%; }
   to { background-position: 200% 50%; }
 }
+/* Gentle float for the static Blue Marble backdrop image. */
+.earth-spin {
+  animation: earth-breathe 26s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes earth-breathe {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(0, -10px, 0) scale(1.02); }
+}
 /* Atmosphere glow hugging the limb. */
 .earth-atmo {
   position: absolute; top: 50%; left: 50%;

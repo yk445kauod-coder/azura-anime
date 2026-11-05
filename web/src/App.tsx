@@ -152,18 +152,20 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background font-sans text-foreground">
-      {/* space backdrop — NASA Blue Marble */}
+      {/* space backdrop — NASA Blue Marble, slowly rotating */}
       <div className="pointer-events-none absolute inset-0" aria-hidden>
         <div className="starfield absolute inset-0 opacity-70" />
+        <div className="earth-atmo" style={{ opacity: 0.55 }} />
         <img
           src="/assets/earth-blue-marble.jpg"
           alt=""
-          className="absolute -bottom-32 right-[-12%] h-[75vh] w-auto -rotate-12 object-contain opacity-[0.28]"
+          className="absolute -bottom-32 right-[-12%] h-[75vh] w-auto -rotate-12 object-contain opacity-[0.28] earth-spin"
           style={{
             maskImage: "radial-gradient(ellipse 70% 70% at 50% 50%, black 40%, transparent 72%)",
             WebkitMaskImage: "radial-gradient(ellipse 70% 70% at 50% 50%, black 40%, transparent 72%)",
           }}
         />
+        <div className="earth-vignette absolute inset-0" />
         <div
           className="absolute -top-40 left-1/4 h-[60vh] w-[60vw] -translate-x-1/2 rounded-full opacity-25"
           style={{
@@ -233,6 +235,12 @@ export default function App() {
               </span>
             </div>
             <div className="ms-auto flex items-center gap-2 md:gap-3">
+              <img
+                src="/assets/nasa-logo.svg"
+                alt="NASA"
+                className="hidden h-8 w-auto opacity-90 mix-blend-screen md:block"
+                style={{ filter: "drop-shadow(0 0 6px rgba(255,106,31,.35))" }}
+              />
               <GlobalSearch
                 onPick={({ tab, ref }) =>
                   navigate((tab === "explorer" ? "publications" : tab) as ViewId, ref)

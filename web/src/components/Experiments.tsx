@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { EmptyState, ErrorState, Loading, SkeletonGrid } from "@/components/States";
+import { ErrorState, Loading, SkeletonGrid } from "@/components/States";
 
 type Experiment = {
   id: number; code: string; name: string; campaign: string | null; status: string | null;
@@ -34,14 +34,19 @@ export default function Experiments({ focusRef }: { focusRef?: string }) {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!listCache);
+  const [hasTried, setHasTried] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
 
   function load() {
     setLoading(true);
     setError(null);
+    // Never flash the empty/error state on a fast fetch: hold the skeleton for
+    // a minimum interval so the flip reads as "loading", not "broken".
+    const minHold = new Promise((r) => setTimeout(r, 650));
     fetch("/api/experiments")
       .then((r) => r.json())
-      .then((d) => {
+      .then(async (d) => {
+        await minHold;
         if (d.error) { setError(d.error); return; }
         const exps = d.experiments ?? [];
         const facs = d.facilities ?? [];
@@ -49,8 +54,11 @@ export default function Experiments({ focusRef }: { focusRef?: string }) {
         setExperiments(exps);
         setFacilities(facs);
       })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+      .catch(async (e) => { await minHold; setError(String(e)); })
+      .finally(() => {
+        setHasTried(true);
+        setLoading(false);
+      });
   }
 
   useEffect(() => {
@@ -133,11 +141,12 @@ export default function Experiments({ focusRef }: { focusRef?: string }) {
             </div>
           </div>
         ))}
-        {!loading && experiments.length === 0 && (
-          <div className="card" style={{ gridColumn: "1 / -1" }}>
-            <EmptyState
+        {!loading && hasTried && experiments.length === 0 && (
+          <div style={{ gridColumn: "1 / -1" }}>
+            <ErrorState
               title={t("No experiments loaded \u2014 check the database connection.")}
-              sub={t("Retry, or confirm the backend is reachable at /api/health.")}
+              message={t("Retry, or confirm the backend is reachable at /api/health.")}
+              onRetry={() => { listCache = null; load(); }}
             />
           </div>
         )}

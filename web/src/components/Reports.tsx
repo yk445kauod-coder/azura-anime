@@ -52,6 +52,7 @@ export default function Reports() {
   const [progress, setProgress] = useState<{ question: string; ok: boolean }[]>([]);
   const [stage, setStage] = useState<"idle" | "retrieving" | "assembling" | "done">("idle");
   const [total, setTotal] = useState(0);
+  const MAX_WAIT_SEC = 180; // a report should never feel unlimited
 
   async function generate() {
     setBusy(true);
@@ -62,6 +63,14 @@ export default function Reports() {
     setStage("retrieving");
     const t0 = Date.now();
     const tick = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 500);
+    // Hard guard: if nothing meaningful arrives for this long, stop instead of
+    // leaving the user staring at an eternal spinner.
+    const failsafe = setTimeout(() => {
+      clearInterval(tick);
+      setBusy(false);
+      setStage("idle");
+      setError("Report generation timed out after 180s. Try a narrower topic, or generate again later.");
+    }, MAX_WAIT_SEC * 1000);
     try {
       // Streamed: the worker emits one event per finished question, so the
       // report is assembled without holding a single long request open.
@@ -83,6 +92,7 @@ export default function Reports() {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
       clearInterval(tick);
+      clearTimeout(failsafe);
       setBusy(false);
       setStage("idle");
     }
@@ -168,7 +178,11 @@ export default function Reports() {
               </span>
               <span className="muted" style={{ fontVariantNumeric: "tabular-nums" }}>
                 {progress.length}{total ? `/${total}` : ""} · {elapsed}s
-                {progress.length === 0 && elapsed > 8 ? " · usually 40–90s" : ""}
+                {progress.length === 0 && elapsed > 8 && elapsed <= 90
+                  ? " · " + t("expected 40–120s")
+                  : progress.length === 0 && elapsed > 90
+                    ? " · " + t("still working — a report can take up to 3 min")
+                    : ""}
               </span>
             </div>
             <div className="bar" style={{ marginTop: 10 }}>

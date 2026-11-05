@@ -1746,7 +1746,7 @@ export default {
           sql`SELECT kind, count(*)::int AS n FROM ignis.document GROUP BY kind ORDER BY n DESC`,
           sql`SELECT extract(year FROM published_date)::int AS year, count(*)::int AS n FROM ignis.document WHERE published_date IS NOT NULL GROUP BY 1 ORDER BY 1`,
           sql`SELECT d.id, d.source_id, d.title, d.kind, d.word_count, d.quality_score, d.published_date, d.landing_url, (SELECT count(*)::int FROM ignis.chunk c WHERE c.document_id = d.id) AS chunks FROM ignis.document d ORDER BY d.quality_score DESC NULLS LAST LIMIT 12`,
-          sql`SELECT metric, count(*)::int AS n, round(min(value)::numeric,3) AS min_value, round(max(value)::numeric,3) AS max_value, mode() WITHIN GROUP (ORDER BY unit) AS unit FROM ignis.dataset_row GROUP BY metric ORDER BY n DESC LIMIT 12`,
+          sql`SELECT metric, count(*)::int AS n, round(min(value)::numeric,3) AS min_value, round(max(value)::numeric,3) AS max_value, mode() WITHIN GROUP (ORDER BY unit) AS unit FROM ignis.dataset_row GROUP BY metric ORDER BY n DESC LIMIT 40`,
           sql`SELECT stage, status, items_in, items_out, bytes_in, started_at, finished_at FROM ignis.pipeline_run ORDER BY id DESC LIMIT 10`,
         ]);
         return json({
